@@ -375,13 +375,17 @@ def test_pipeline_cmd(
 
         if not predicted_proteins.exists() and final_gff3.exists():
             click.echo("  Extracting predicted proteins from annotation...")
-            # gff3toseq writes to stdout; capture and save to file
-            cmd = ["eukan", "gff3toseq", "-g", str(genome), "-i", str(final_gff3), "-o", "protein"]
+            cmd = [
+                "eukan", "gff3toseq",
+                "-g", str(genome),
+                "-i", str(final_gff3),
+                "-f", "protein",
+                "-o", str(predicted_proteins),
+            ]
             click.echo(f"  $ {' '.join(cmd)}")
             result = subprocess.run(cmd, cwd=work_dir, capture_output=True, text=True)
-            if result.returncode == 0 and result.stdout:
-                predicted_proteins.write_text(result.stdout)
-                n_seqs = result.stdout.count(">")
+            if result.returncode == 0 and predicted_proteins.exists():
+                n_seqs = predicted_proteins.read_text().count(">")
                 click.echo(f"  Extracted {n_seqs} protein sequences.")
             else:
                 click.echo("  Failed to extract proteins, skipping functional annotation.")

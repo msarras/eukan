@@ -113,7 +113,7 @@ The typical workflow runs each subcommand from the same working directory. Each 
 ./eukan-docker prep-submission -t template.sbt --organism "Genus species"
 
 # Extract sequences from GFF3
-./eukan-docker gff3toseq -g genome.fasta -i genes.gff3 -o protein
+./eukan-docker gff3toseq -g genome.fasta -i genes.gff3 --output-format protein -o proteins.faa
 ```
 
 Each auto-discovered input can be overridden explicitly (see subcommand docs below).
@@ -150,7 +150,7 @@ Pipeline parameters:
   -n, --numcpu INTEGER             Number of CPU threads. [default: all]
   --existing-augustus TEXT          Use pre-trained AUGUSTUS species parameters.
   -w, --weights INTEGER            Weights: protein, gene predictions, transcripts. [default: 2 1 3]
-  -C, --code INTEGER               NCBI genetic code table number. [default: 11]
+  -c, --code INTEGER               NCBI genetic code table number. [default: 11]
 
 Override options:
   -tf, --transcripts-fasta PATH   Override auto-discovered transcript FASTA.
@@ -191,7 +191,7 @@ Pipeline parameters:
                                    Strand-specific library type (RF/FR for paired, R/F for single).
   -t, --align-mode [EndToEnd|Local] STAR alignment mode. [default: Local]
   --splice-permissive              Allow non-canonical splice sites (GC-AG, AT-AC).
-  -c, --genetic-code [1|6|10|12]   Genetic code for PASA. [default: 1]
+  -c, --code [1|6|10|12]           NCBI genetic code for PASA. [default: 1]
   -m, --min-intron INTEGER         Min intron length. [default: 20]
   -M, --max-intron INTEGER         Max intron length. [default: 5000]
   --phred [33|64]                  Phred quality score. [default: 33]
@@ -297,8 +297,8 @@ Override options:
   -i, --gff3 PATH             Override auto-discovered annotated GFF3.
 
 Pipeline parameters:
-  -c, --cleanup TEXT          table2asn -c cleanup flags. [default: befw]
-  -M, --mode TEXT             table2asn -M flatfile mode. [default: n]
+  --cleanup TEXT              table2asn -c cleanup flags. [default: befw]
+  --mode TEXT                 table2asn -M flatfile mode. [default: n]
   -a, --assembly-type TEXT    table2asn -a assembly type / gap config.
                               [default: r10k]
   --extra-args TEXT           Extra table2asn arguments, shell-quoted
@@ -309,9 +309,9 @@ Pipeline parameters:
                               it to table2asn. [default: cleanup-gff3]
 
 Output options:
-  -o, --output PATH           Output .sqn path.
-                              [default: <outdir>/<genome-stem>.sqn]
-  -d, --outdir PATH           Output directory. [default: ./submission]
+  -o, --output-file PATH      Output .sqn path.
+                              [default: <output-dir>/<genome-stem>.sqn]
+  -d, --output-dir PATH       Output directory. [default: ./submission]
   --print-command             Print the resolved table2asn command and exit.
   --dry-run                   Print the command and create the output dir,
                               but don't run table2asn.
@@ -347,11 +347,17 @@ Extract protein or cDNA sequences from a GFF3 + genome.
 ```
 Usage: eukan gff3toseq [OPTIONS]
 
-Options:
-  -g, --genome PATH           Genome FASTA. [required]
-  -i, --gff3 PATH             GFF3 with gene models. [required]
-  -o, --output [protein|cdna] Output type. [default: protein]
-  -c, --code INTEGER          Genetic code table. [default: 1]
+Required input:
+  -g, --genome PATH                Genome FASTA. [required]
+  -i, --gff3 PATH                  GFF3 with gene models. [required]
+
+Pipeline parameters:
+  --output-format [protein|cdna]   Output sequence type. [default: protein]
+  -c, --code INTEGER               NCBI genetic code table number. [default: 1]
+
+Output options:
+  -o, --output-file FILENAME       Write FASTA to this file ('-' for stdout).
+                                   [default: stdout]
 ```
 
 ### `eukan db-fetch`
@@ -483,7 +489,7 @@ Checked 14 external tools:
 
 The annotation pipeline (`eukan annotate`) runs the following steps:
 
-1. **ORF finding**:  Identify ORFs in transcript assemblies (if provided). Uses the configured genetic code (`-C`/`--code`) so that alternative stop codons (e.g., code 6 where TAA/TAG encode glutamine) are handled correctly.
+1. **ORF finding**:  Identify ORFs in transcript assemblies (if provided). Uses the configured genetic code (`-c`/`--code`) so that alternative stop codons (e.g., code 6 where TAA/TAG encode glutamine) are handled correctly.
 2. **GeneMark**:  Ab initio gene prediction (ES mode, or ET mode if RNA-seq intron hints are available with >= 150 introns). Passes `--gcode` for non-standard genetic codes (codes 6 and 26).
 3. **Protein alignment**:  Spliced alignment via spaln (intron-rich genomes, > 25% introns/gene) or GenomeThreader (intron-poor). See [Protein alignment modes](#protein-alignment-modes).
 4. **AUGUSTUS**:  Train species-specific parameters from concordant GeneMark/protein models, then predict genes using protein + RNA-seq hints. Non-canonical splice sites (e.g., AT-AC) are allowed automatically when supported by sufficient junction evidence from STAR; `--splice-permissive` lowers the evidence thresholds.

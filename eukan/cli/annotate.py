@@ -10,6 +10,7 @@ from click_option_group import optgroup
 from eukan.cli._framework import (
     FULL_CODE_TABLE,
     PreformattedEpilogCommand,
+    code_option,
     drop_none,
     genome_option,
     numcpu_option,
@@ -43,10 +44,7 @@ from eukan.cli._framework import (
     show_default=True,
     help="Weights for evidence sources: protein, gene predictions, transcripts.",
 )
-@optgroup.option(
-    "--code", "-C", type=int, default=11, show_default=True,
-    help="NCBI genetic code table number.",
-)
+@code_option(default=11)
 @optgroup.group("Override options")
 @optgroup.option(
     "--transcripts-fasta", "-tf", type=click.Path(exists=True, path_type=Path),

@@ -29,17 +29,21 @@ from eukan.cli._framework import (
     "--strand-specific", "-S", type=click.Choice(["RF", "FR", "R", "F"]), default=None,
     help="Strand-specific library type.",
 )
-@optgroup.option("--align-mode", "-t", type=click.Choice(["EndToEnd", "Local"]), default="Local", show_default=True)
+@optgroup.option(
+    "--align-mode", "-t", type=click.Choice(["EndToEnd", "Local"]),
+    default="Local", show_default=True,
+    help="STAR read alignment mode (end-to-end vs soft-clipped local).",
+)
 @optgroup.option(
     "--splice-permissive", is_flag=True, default=False,
     help="Allow non-canonical splice sites (GC-AG, AT-AC). "
     "Sets PASA splice boundary stringency to 0 and retains non-canonical junctions.",
 )
 @optgroup.option(
-    "--genetic-code", "-c",
+    "--code", "-c",
     type=click.Choice(["1", "6", "10", "12"]),
     default="1", show_default=True,
-    help="Genetic code for PASA. Supported: 1=standard, 6=Tetrahymena, 10=Euplotes, 12=Candida.",
+    help="NCBI genetic code for PASA. Supported: 1=standard, 6=Tetrahymena, 10=Euplotes, 12=Candida.",
 )
 @optgroup.option("--min-intron", "-m", type=int, default=20, show_default=True, help="Minimum intron length.")
 @optgroup.option("--max-intron", "-M", type=int, default=5000, show_default=True, help="Maximum intron length.")
@@ -71,7 +75,7 @@ def assemble(
     run_pasa: bool,
     jaccard_clip: bool,
     splice_permissive: bool,
-    genetic_code: str,
+    code: str,
     memory_gb: int | None,
     force: bool,
 ) -> None:
@@ -116,7 +120,7 @@ def assemble(
         align_mode=align_mode,
         jaccard_clip=jaccard_clip,
         splice_permissive=splice_permissive,
-        genetic_code=genetic_code,
+        genetic_code=code,
         left_reads=left.resolve() if left else None,
         right_reads=right.resolve() if right else None,
         single_reads=single.resolve() if single else None,

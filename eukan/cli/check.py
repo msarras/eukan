@@ -5,10 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 
 import click
+from click_option_group import optgroup
+
+from eukan.cli._framework import PreformattedEpilogCommand
 
 
-@click.command()
-@click.option(
+@click.command(cls=PreformattedEpilogCommand)
+@optgroup.group("Pipeline parameters")
+@optgroup.option(
     "--for", "subcommands", multiple=True,
     type=click.Choice(
         ["annotate", "assemble", "func-annot", "db-fetch", "mask-repeats", "prep-submission"],
@@ -16,11 +20,11 @@ import click
     ),
     help="Only check tools needed by these subcommands. If omitted, check all.",
 )
-@click.option(
+@optgroup.option(
     "--db-dir", type=click.Path(path_type=Path), default="databases",
     show_default=True, help="Database directory to check.",
 )
-@click.option(
+@optgroup.option(
     "--homology-db", type=click.Choice(["uniprot", "kofam"], case_sensitive=False),
     default=None,
     help="When set, only check the chosen homology DB (plus Pfam). Without "

@@ -24,7 +24,7 @@ poetry run eukan annotate -g genome.fasta -p proteins.fasta --kingdom protist
 poetry run eukan assemble -g genome.fasta -l left.fq -r right.fq -A -T -P
 poetry run eukan func-annot -p proteins.faa --gff3 genes.gff3
 poetry run eukan prep-submission -t submission.sbt --organism "Genus species"
-poetry run eukan gff3toseq -g genome.fa -i genes.gff3 -o protein
+poetry run eukan gff3toseq -g genome.fa -i genes.gff3 -f protein -o proteins.faa
 poetry run eukan db-fetch -o databases/
 poetry run eukan compare -r ref.gff3 -p pred.gff3                # single
 poetry run eukan compare -r ref.gff3 -p p1.gff3 -p p2.gff3 -p p3.gff3 \
@@ -192,6 +192,48 @@ Both wrap step-dir setup, manifest updates, and force/skip logic so that step-le
 - Each pipeline package follows the same shape: `pipeline.py` (driver) + one file per tool
 - Per-step output isolation: every subcommand writes under its own `<cwd>/<step-subdir>/`. Don't write into `cwd` directly — use `step_work_dir(step)` from `infra/layout.py`
 - Cross-pipeline files go through `Artifact` + `find()` rather than hardcoded paths
-- CLI option groups are harmonized across subcommands: "Required input", "Pipeline parameters", "Re-run steps". Step re-run flags follow the `--run-*` pattern (e.g., `--run-genemark`, `--run-star`)
+- CLI option groups are harmonized across subcommands: "Required input", "Pipeline parameters", "Re-run steps". Step re-run flags follow the `--run-*` pattern (e.g., `--run-genemark`, `--run-star`). See "CLI conventions" below for the full canonical layout.
 - Prediction-count logging: every per-tool step that emits a GFF3 calls `_log_prediction_count("Tool", path)` (annotation pipeline) or `count_gff3_features()` so the user sees gene counts at each phase
 - 3-way concordance (`gff/concordance.extract_supported_models`) emits per-source counts at INFO and a WARNING when concordance falls below `WEAK_CONCORDANCE_THRESHOLD` (250 gene models) — used by both AUGUSTUS and SNAP training-set construction
+
+### CLI conventions
+
+Authoritative reference for shared flag spellings and option-group layout. New subcommands should follow this template.
+
+**Canonical short flags** (the same letter means the same thing in every subcommand that uses it):
+
+| Flag | Long form | Notes |
+|------|-----------|-------|
+| `-g` | `--genome` | Use `genome_option()` from `_framework.py`. |
+| `-i` | `--gff3` | Input GFF3 file. |
+| `-p` | `--proteins` | And `--predicted` in `compare` (same letter, related concept). |
+| `-n` | `--numcpu` | Use `numcpu_option` from `_framework.py`. |
+| `-f` | `--force` | **Reserved.** Use `force_option` (or `force_option(help_text=...)` for custom wording). |
+| `-c` | `--code` | NCBI genetic code. Use `code_option(default=N)` from `_framework.py`. |
+| `-o` | `--output-file` / `--output-dir` | Output destination — pick `-file` for a path, `-dir` for a directory. Never bare `--output`. |
+| `-d` | directory option | `--db-dir`, `--work-dir`, `--output-dir`. |
+| `-k` | `--kingdom` | annotate only. |
+| `-l` / `-r` / `-s` | `--left` / `--right` / `--single` | assemble paired/single reads. |
+| `-r` | `--reference` (compare), `--rnaseq-hints` (annotate) | Different commands, no real collision. |
+| `-e` | `--evalue` | func-annot. |
+| `-w` | `--weights` | annotate. |
+| `-t` | `--template` (prep-submission), `--align-mode` (assemble) | Different commands. |
+
+**Option groups**, in display order:
+
+1. `Required input` — required paths (genome, gff3, proteins, reads).
+2. `Source qualifiers` — prep-submission only (`--organism`, `--isolate`, `--source-info`, `--locus-tag-prefix`).
+3. `Pipeline parameters` — tunables that affect behaviour but have defaults.
+4. `Override options` — flags that override auto-discovered values from prior pipeline runs.
+5. `Experimental` — opt-in flags for unstable / under-evaluation features.
+6. `Output options` — output paths and dry-run/print-only modifiers.
+7. `Re-run steps` — `--run-*` per-step flags plus the `-f, --force` master flag at the end.
+
+**Shared helpers** (`eukan/cli/_framework.py`): always use these instead of redefining inline.
+
+- `genome_option(help_text=...)` — required `--genome/-g`.
+- `numcpu_option` — `--numcpu/-n` with `cpu_count()` default.
+- `force_option` or `force_option(help_text="…")` — `--force/-f` flag.
+- `code_option(default=N)` — `--code/-c` int with command-specific default.
+
+Always use `@click.command(cls=PreformattedEpilogCommand, ...)` when the command uses option groups so the help text renders without the wrapping "Options:" header.
