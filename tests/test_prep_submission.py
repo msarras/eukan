@@ -38,7 +38,7 @@ def _base_config(inputs: dict[str, Path], **overrides) -> SubmissionConfig:
         gff3=inputs["gff3"],
         template=inputs["template"],
         organism="Foo bar",
-        outdir=inputs["work_dir"] / "submission",
+        output_dir=inputs["work_dir"] / "submission",
     )
     kwargs.update(overrides)
     return SubmissionConfig(**kwargs)
@@ -127,12 +127,12 @@ class TestBuildCommand:
 class TestAutoDiscovery:
     def test_default_output_under_outdir(self, submission_inputs):
         config = _base_config(submission_inputs)
-        assert config.output == config.outdir / f"{config.genome.stem}.sqn"
+        assert config.output_file == config.output_dir / f"{config.genome.stem}.sqn"
 
     def test_explicit_output_preserved(self, submission_inputs):
         explicit = submission_inputs["work_dir"] / "custom.sqn"
-        config = _base_config(submission_inputs, output=explicit)
-        assert config.output == explicit
+        config = _base_config(submission_inputs, output_file=explicit)
+        assert config.output_file == explicit
 
     def test_discovers_genome_from_manifest(self, submission_inputs):
         # Construct a minimal eukan-run.json with a genome path, omit explicit

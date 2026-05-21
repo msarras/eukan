@@ -30,7 +30,7 @@ from eukan.cli._framework import PreformattedEpilogCommand
     help="Isolate / strain identifier (optional).",
 )
 @optgroup.option(
-    "--source-info", "-j", type=str, default=None,
+    "--source-info", type=str, default=None,
     help="Raw -j string for table2asn (e.g. '[organism=Foo] [isolate=Bar] "
          "[country=Canada]'). Overrides --organism / --isolate when set.",
 )
@@ -50,11 +50,11 @@ from eukan.cli._framework import PreformattedEpilogCommand
 )
 @optgroup.group("Pipeline parameters")
 @optgroup.option(
-    "--cleanup", "-c", type=str, default="befw", show_default=True,
+    "--cleanup", type=str, default="befw", show_default=True,
     help="table2asn -c cleanup flags.",
 )
 @optgroup.option(
-    "--mode", "-M", type=str, default="n", show_default=True,
+    "--mode", type=str, default="n", show_default=True,
     help="table2asn -M flatfile mode.",
 )
 @optgroup.option(
@@ -73,11 +73,11 @@ from eukan.cli._framework import PreformattedEpilogCommand
 )
 @optgroup.group("Output options")
 @optgroup.option(
-    "--output", "-o", type=click.Path(path_type=Path), default=None,
-    help="Output .sqn path. Defaults to <outdir>/<genome-stem>.sqn.",
+    "--output-file", "-o", type=click.Path(path_type=Path), default=None,
+    help="Output .sqn path. Defaults to <output-dir>/<genome-stem>.sqn.",
 )
 @optgroup.option(
-    "--outdir", "-d", type=click.Path(path_type=Path), default=None,
+    "--output-dir", "-d", type=click.Path(path_type=Path), default=None,
     help="Output directory for .sqn and validator reports. Defaults to ./submission.",
 )
 @optgroup.option(
@@ -101,8 +101,8 @@ def prep_submission(
     assembly_type: str,
     extra_args: str,
     cleanup_gff3: bool,
-    output: Path | None,
-    outdir: Path | None,
+    output_file: Path | None,
+    output_dir: Path | None,
     print_command: bool,
     dry_run: bool,
 ) -> None:
@@ -147,8 +147,8 @@ def prep_submission(
         assembly_type=assembly_type,
         extra_args=shlex.split(extra_args) if extra_args else None,
         cleanup_gff3=cleanup_gff3,
-        output=output.resolve() if output else None,
-        outdir=outdir.resolve() if outdir else None,
+        output_file=output_file.resolve() if output_file else None,
+        output_dir=output_dir.resolve() if output_dir else None,
     ))
 
     sqn = run_prep_submission(config, print_only=print_command, dry_run=dry_run)

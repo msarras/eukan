@@ -10,7 +10,7 @@ import click
 @click.command()
 @click.option(
     "--work-dir", "-d", type=click.Path(exists=True, path_type=Path), default=".",
-    help="Working directory containing eukan-run.json.",
+    show_default=True, help="Working directory containing eukan-run.json.",
 )
 def status(work_dir: Path) -> None:
     """Show the status of a pipeline run."""

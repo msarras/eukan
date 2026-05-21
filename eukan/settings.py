@@ -437,8 +437,8 @@ class SubmissionConfig(_StepRunSettings):
     locus_tag_prefix: str | None = None
 
     # --- Output ---
-    output: Path | None = None  # default: <outdir>/<genome-stem>.sqn
-    outdir: Path = Field(default_factory=lambda: Path.cwd() / "submission")
+    output_file: Path | None = None  # default: <output_dir>/<genome-stem>.sqn
+    output_dir: Path = Field(default_factory=lambda: Path.cwd() / "submission")
     extra_args: list[str] = Field(default_factory=list)
 
     # --- GFF3 preprocessing ---
@@ -492,8 +492,8 @@ class SubmissionConfig(_StepRunSettings):
                 "Pass --gff3 or run `eukan annotate` (and optionally `eukan func-annot`) first."
             )
 
-        if self.output is None:
-            object.__setattr__(self, "output", self.outdir / f"{self.genome.stem}.sqn")
+        if self.output_file is None:
+            object.__setattr__(self, "output_file", self.output_dir / f"{self.genome.stem}.sqn")
 
         return self
 

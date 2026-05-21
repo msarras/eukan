@@ -5,28 +5,30 @@ from __future__ import annotations
 from pathlib import Path
 
 import click
+from click_option_group import optgroup
+
+from eukan.cli._framework import force_option
 
 
 @click.command("db-fetch")
-@click.option(
+@optgroup.group("Pipeline parameters")
+@optgroup.option(
     "--output-dir", "-o", type=click.Path(path_type=Path), default="databases",
     show_default=True, help="Directory to download databases into.",
 )
-@click.option(
+@optgroup.option(
     "--homology-db", type=click.Choice(["uniprot", "kofam"], case_sensitive=False),
     default="uniprot", show_default=True,
     help="Which homology DB to fetch alongside Pfam. 'uniprot' downloads "
          "SwissProt; 'kofam' downloads the KOfam HMM profiles + ko_list "
          "and presses an eukaryote-only HMM database.",
 )
-@click.option(
-    "--force", "-f", is_flag=True, help="Re-download even if databases are up to date.",
-)
-@click.option(
+@optgroup.option(
     "--database", "-d", multiple=True,
     type=click.Choice(["uniprot", "pfam", "kofam", "ko_list"], case_sensitive=False),
     help="Specific database(s) to fetch. Overrides --homology-db when given.",
 )
+@force_option(help_text="Re-download even if databases are up to date.")
 def db_fetch(
     output_dir: Path, homology_db: str, force: bool, database: tuple[str, ...],
 ) -> None:

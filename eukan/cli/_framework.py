@@ -248,11 +248,25 @@ def numcpu_option(func):
     )(func)
 
 
-def force_option(func):
-    return optgroup.option(
-        "--force", "-f", is_flag=True,
-        help="Force re-run all steps (ignore cached outputs).",
-    )(func)
+def force_option(
+    func=None,
+    *,
+    help_text: str = "Force re-run all steps (ignore cached outputs).",
+):
+    """Build a --force/-f flag option, optionally with custom help text.
+
+    Usable as a bare decorator (``@force_option``) for the default help,
+    or as a factory (``@force_option(help_text="…")``) for command-specific
+    wording (e.g. db-fetch reads "Re-download…", not "Force re-run…").
+    """
+    def decorator(f):
+        return optgroup.option(
+            "--force", "-f", is_flag=True, help=help_text,
+        )(f)
+
+    if func is None:
+        return decorator
+    return decorator(func)
 
 
 def genome_option(help_text: str = "Genome sequence in FASTA format."):
@@ -262,5 +276,15 @@ def genome_option(help_text: str = "Genome sequence in FASTA format."):
             "--genome", "-g", required=True,
             type=click.Path(exists=True, path_type=Path),
             help=help_text,
+        )(func)
+    return decorator
+
+
+def code_option(default: int = 1):
+    """Build a --code/-c NCBI genetic-code option with a command-specific default."""
+    def decorator(func):
+        return optgroup.option(
+            "--code", "-c", type=int, default=default, show_default=True,
+            help="NCBI genetic code table number.",
         )(func)
     return decorator
