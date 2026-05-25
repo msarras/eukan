@@ -88,7 +88,11 @@ def _write_prettified_gff3(consdb, shortname: str, out_path: Path) -> None:
             outfile.write(f"{feature}\n")
 
 
-def build_consensus_models(config: PipelineConfig, *evidence: Path) -> Path:
+def build_consensus_models(
+    config: PipelineConfig,
+    *evidence: Path,
+    transcripts: Path | None = None,
+) -> Path:
     """Build final consensus models from all predictions.
 
     Phases:
@@ -96,11 +100,16 @@ def build_consensus_models(config: PipelineConfig, *evidence: Path) -> Path:
       2. (optional) PASA UTR/altsplice update if config.utrs_db is set
       3. Patch in transcript ORFs that don't overlap any consensus gene
       4. Recompute CDS phases, assign locus tags, write final.gff3
+
+    ``transcripts`` is the file used as EVM's ``--transcript_alignments``
+    input. It's PASA's ``nr_transcripts.gff3`` when transcripts were
+    assembled, the GeneMark predictions when there's no transcript
+    evidence in the protein-only non-fungus/protist branch, or ``None``.
     """
     sdir = step_dir(config.work_dir, "evm_consensus_models")
     log.info("Building consensus gene models...")
 
-    run_evm(config, list(evidence))
+    run_evm(config, list(evidence), transcripts=transcripts)
     log.info(
         "EVM: %d gene predictions",
         count_gff3_features(sdir / "consensus_models.gff3"),
