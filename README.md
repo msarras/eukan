@@ -172,6 +172,10 @@ Re-run steps:
   --run-consensus                  Force re-run EVM consensus model building.
 ```
 
+#### Notes on `annotate` input
+
+It's tempting to provide more protein sequence data to the pipeline with the idea of covering more of the genome, but typically this leads to a degradation in performance at worst, or strongly diminishing returns at best. This is mostly due to the presence of the same orthologs, paralogs and derived sequences across multiple different species within the database. The further those sequences are to the target genome, lower the useful signal in aligning them. If can often lead to artifacts or misleading evidence that can interfere with the consensus building process, unless down-weighted. It's more ideal to find ten proteomes of the closest neighboring species available, otherwise the UniProt-SwissProt verified collection is a good alternative.
+
 ### `eukan assemble`
 
 Assemble transcriptome from RNA-seq reads for use with `eukan annotate`. Provide either paired-end reads (`--left` and `--right`) or single-end reads (`--single`).
