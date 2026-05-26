@@ -24,7 +24,7 @@ poetry run eukan annotate -g genome.fasta -p proteins.fasta --kingdom protist
 poetry run eukan assemble -g genome.fasta -l left.fq -r right.fq -A -T -P
 poetry run eukan func-annot -p proteins.faa --gff3 genes.gff3
 poetry run eukan prep-submission -t submission.sbt --organism "Genus species"
-poetry run eukan gff3toseq -g genome.fa -i genes.gff3 -f protein -o proteins.faa
+poetry run eukan gff3toseq -g genome.fa -i genes.gff3 --output-format protein -o proteins.faa
 poetry run eukan db-fetch -o databases/
 poetry run eukan compare -r ref.gff3 -p pred.gff3                # single
 poetry run eukan compare -r ref.gff3 -p p1.gff3 -p p2.gff3 -p p3.gff3 \
