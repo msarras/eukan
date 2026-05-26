@@ -69,20 +69,38 @@ def _parse_evm_command(
     return tokens, cwd, stdout_file, stderr_file
 
 
-def run_evm(config: PipelineConfig, evidence: list[Path]) -> Path:
-    """Run EVidenceModeler to build consensus gene models."""
-    sdir = step_dir(config.work_dir, "evm_consensus_models")
-    log.info("Running EVidenceModeler consensus building...")
-    run_cmd(["cdbfasta", str(config.genome)], cwd=sdir)
+def _first_source_token(gff3: Path) -> str | None:
+    """Return the GFF3 source column (col 2) of the first data line, or None."""
+    with open(gff3) as fh:
+        for line in fh:
+            if not line or line.startswith("#"):
+                continue
+            cols = line.rstrip("\n").split("\t")
+            if len(cols) >= 2 and cols[1]:
+                return cols[1]
+    return None
 
-    w = [str(d) for d in config.weights]
-    weights_map = {
-        "prot.gff3": ["PROTEIN", "prot_align", w[0]],
-        "augustus.gff3": ["ABINITIO_PREDICTION", "augustus", w[1]],
-        "snap.gff3": ["ABINITIO_PREDICTION", "snap", w[1]],
-        "genemark.gff3": ["ABINITIO_PREDICTION", "genemark", w[1]],
-        "codingquarry.gff3": ["ABINITIO_PREDICTION", "codingquarry", w[1]],
-        "nr_transcripts.gff3": ["TRANSCRIPT", "PASA-assembly", w[2]],
+
+def _stage_evm_inputs(
+    sdir: Path,
+    evidence: list[Path],
+    transcripts: Path | None,
+    weights: list[str],
+) -> None:
+    """Symlink evidence into ``sdir`` and write weights.txt + gene_predictions.gff3.
+
+    ``evidence`` is expected to contain the protein alignments (``prot.gff3``)
+    plus zero or more ab initio predictions; the ab initios are concatenated
+    into ``gene_predictions.gff3`` for EVM. ``transcripts`` is staged
+    separately as ``nr_transcripts.gff3``; its TRANSCRIPT weights entry uses
+    the source token actually present in the file so EVM matches it.
+    """
+    ab_initio_weights = {
+        "prot.gff3":         ["PROTEIN",             "prot_align",   weights[0]],
+        "augustus.gff3":     ["ABINITIO_PREDICTION", "augustus",     weights[1]],
+        "snap.gff3":         ["ABINITIO_PREDICTION", "snap",         weights[1]],
+        "genemark.gff3":     ["ABINITIO_PREDICTION", "genemark",     weights[1]],
+        "codingquarry.gff3": ["ABINITIO_PREDICTION", "codingquarry", weights[1]],
     }
 
     with open(sdir / "weights.txt", "w") as wf, \
@@ -90,19 +108,47 @@ def run_evm(config: PipelineConfig, evidence: list[Path]) -> Path:
         for ev in evidence:
             ev_name = ev.name
             symlink(ev, sdir / ev_name)
-            if ev_name in weights_map:
-                wf.write("\t".join(weights_map[ev_name]) + "\n")
-            if ev_name not in ("nr_transcripts.gff3", "prot.gff3"):
+            if ev_name in ab_initio_weights:
+                wf.write("\t".join(ab_initio_weights[ev_name]) + "\n")
+            if ev_name != "prot.gff3":
                 with open(ev, "rb") as ef:
                     shutil.copyfileobj(ef, pf)
 
-    # Partition and run EVM
+        if transcripts is not None:
+            symlink(transcripts, sdir / "nr_transcripts.gff3")
+            # Source token comes from the file (PASA-assembly, genemark, etc.)
+            # so EVM matches predictions to the weight regardless of producer.
+            source = _first_source_token(transcripts) or "transcript"
+            wf.write("\t".join(["TRANSCRIPT", source, weights[2]]) + "\n")
+
+
+def run_evm(
+    config: PipelineConfig,
+    evidence: list[Path],
+    *,
+    transcripts: Path | None = None,
+) -> Path:
+    """Run EVidenceModeler to build consensus gene models."""
+    sdir = step_dir(config.work_dir, "evm_consensus_models")
+    log.info("Running EVidenceModeler consensus building...")
+    run_cmd(["cdbfasta", str(config.genome)], cwd=sdir)
+
+    weights = [str(d) for d in config.weights]
+    _stage_evm_inputs(sdir, evidence, transcripts, weights)
+
+    # Partition and run EVM. Only forward --transcript_alignments when we
+    # actually staged one, so EVM's perl scripts don't trip over a dangling
+    # path in the no-transcripts case.
+    transcript_args = (
+        ["--transcript_alignments", "nr_transcripts.gff3"]
+        if transcripts is not None else []
+    )
     run_cmd(
         [
             "partition_EVM_inputs.pl",
             "--genome", str(config.genome),
             "--gene_predictions", "gene_predictions.gff3",
-            "--transcript_alignments", "nr_transcripts.gff3",
+            *transcript_args,
             "--protein_alignments", "prot.gff3",
             "--segmentSize", "100000",
             "--overlapSize", "10000",
@@ -120,7 +166,7 @@ def run_evm(config: PipelineConfig, evidence: list[Path]) -> Path:
             "--weights", str(sdir / "weights.txt"),
             "--gene_predictions", "gene_predictions.gff3",
             "--protein_alignments", "prot.gff3",
-            "--transcript_alignments", "nr_transcripts.gff3",
+            *transcript_args,
             "--output_file_name", "consensus_models.out",
             "--stop_codons", stop_codons,
             "--partitions", "partitions_list.out",

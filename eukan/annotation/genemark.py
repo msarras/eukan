@@ -17,6 +17,18 @@ from eukan.validation import validate_gff
 log = get_logger(__name__)
 
 
+def _genemark_homogenize_source(f: gffutils.Feature) -> gffutils.Feature:
+    """Set ``source`` to ``genemark`` for all features.
+
+    GeneMark stamps column 2 as ``GeneMark.hmm`` (or ``GeneMark.hmm3`` in
+    newer releases). EVM matches weights by the source token, so a
+    version-dependent value silently zeros out GeneMark's contribution.
+    Mirror what ``augustus`` / ``snap`` / ``codingquarry`` already do.
+    """
+    f.source = "genemark"
+    return f
+
+
 def _read_genemark_gtf(path: Path) -> gffutils.FeatureDB:
     """Parse GeneMark's GTF output into a normalised GFF3 FeatureDB.
 
@@ -85,4 +97,8 @@ def run_genemark(config: PipelineConfig, hints: Path | None = None) -> Path:
 
     # Convert GeneMark GTF to normalized GFF3
     gmdb = _read_genemark_gtf(sdir / "genemark.gtf")
-    return normalize_to_gff3(gmdb, sdir / output, fix_contig_names=True)
+    return normalize_to_gff3(
+        gmdb, sdir / output,
+        post_transform=_genemark_homogenize_source,
+        fix_contig_names=True,
+    )

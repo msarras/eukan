@@ -377,14 +377,19 @@ def _phase_evm(
         evm_args.append(ev["snap"])
     if "codingquarry" in ev:
         evm_args.append(ev["codingquarry"])
+
+    transcripts: Path | None = None
     if config.has_transcripts:
         assert config.transcripts_gff is not None
-        evm_args.append(config.transcripts_gff)
+        transcripts = config.transcripts_gff
     elif "snap" in ev and not (config.is_fungus or config.is_protist):
-        # Protein-only non-fungus/protist: also pass GeneMark as transcript-style evidence.
-        evm_args.append(ev["genemark"])
+        # Protein-only non-fungus/protist: stand GeneMark in as the
+        # transcript_alignments input EVM expects (there is no PASA
+        # output here). The file is staged under nr_transcripts.gff3
+        # in run_evm so EVM's perl scripts find it by name.
+        transcripts = ev["genemark"]
 
     return _run_step(
         config, manifest, "evm_consensus_models", build_consensus_models,
-        *evm_args,
+        *evm_args, transcripts=transcripts,
     )

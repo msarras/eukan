@@ -379,7 +379,7 @@ def test_pipeline_cmd(
                 "eukan", "gff3toseq",
                 "-g", str(genome),
                 "-i", str(final_gff3),
-                "-f", "protein",
+                "--output-format", "protein",
                 "-o", str(predicted_proteins),
             ]
             click.echo(f"  $ {' '.join(cmd)}")
@@ -389,6 +389,9 @@ def test_pipeline_cmd(
                 click.echo(f"  Extracted {n_seqs} protein sequences.")
             else:
                 click.echo("  Failed to extract proteins, skipping functional annotation.")
+                if result.stderr:
+                    for line in result.stderr.rstrip().splitlines():
+                        click.echo(f"    {line}")
                 predicted_proteins = None
 
         if predicted_proteins and predicted_proteins.exists():
