@@ -106,6 +106,7 @@ eukan/
 ├── assembly/           # Transcriptome assembly pipeline
 │   ├── pipeline.py     # run_assembly() dispatch (StepSpec-driven)
 │   ├── star.py         # STAR read mapping, splice site profiling, hint generation
+│   ├── bam_diagnostic.py # Post-STAR soft-clip + intron BAM walk → trans-splicing / non-canonical-splice verdict
 │   ├── trinity.py      # Trinity genome-guided and de novo assembly
 │   └── pasa.py         # PASA spliced alignment and transcript hints
 │
