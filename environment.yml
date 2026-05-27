@@ -1,5 +1,5 @@
 # Auto-generated from tools.toml — do not edit manually.
-# Regenerate with: eukan dev generate-env
+# Regenerate with: python scripts/generate-env.py
 #
 # Tools requiring manual installation:
 #   - genemark: Requires a license from https://topaz.gatech.edu/GeneMark/license_download.cgi
