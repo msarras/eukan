@@ -36,6 +36,9 @@ class Artifact(StrEnum):
     # --- assembly diagnostics consumed by AUGUSTUS ---
     SPLICE_SUMMARY = "splice_site_summary.json"
 
+    # --- assembly diagnostic emitted by the soft-clip / intron walk ---
+    SOFTCLIP_DIAGNOSTIC = "softclip_diagnostic_summary.json"
+
     # --- repeats outputs consumed by AUGUSTUS ---
     REPEATMASK_HINTS = "hints_repeatmask.gff"
 
@@ -50,6 +53,7 @@ _PRODUCER: dict[Artifact, str] = {
     Artifact.NR_TRANSCRIPTS_GFF:   "assemble",
     Artifact.RNASEQ_HINTS:         "assemble",
     Artifact.SPLICE_SUMMARY:       "assemble",
+    Artifact.SOFTCLIP_DIAGNOSTIC:  "assemble",
     Artifact.REPEATMASK_HINTS:     "mask-repeats",
     Artifact.FINAL_GFF3:           "annotate",
     Artifact.FINAL_FUNC_GFF3:      "func-annot",
