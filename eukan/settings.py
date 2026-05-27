@@ -312,6 +312,7 @@ class AssemblyConfig(_StepRunSettings):
     align_mode: str = "Local"
     jaccard_clip: bool = False
     splice_permissive: bool = False
+    diagnose_softclips: bool = True
 
     @computed_field  # type: ignore[prop-decorator]
     @property

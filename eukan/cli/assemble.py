@@ -40,6 +40,13 @@ from eukan.cli._framework import (
     "Sets PASA splice boundary stringency to 0 and retains non-canonical junctions.",
 )
 @optgroup.option(
+    "--diagnose-softclips/--no-diagnose-softclips", default=True,
+    show_default=True,
+    help="Run the soft-clip + intron diagnostic after STAR. "
+    "Detects trans-splicing (via de novo splice-leader clusters) and "
+    "non-canonical splice prevalence; surfaces both as INFO/WARNING.",
+)
+@optgroup.option(
     "--code", "-c",
     type=click.Choice(["1", "6", "10", "12"]),
     default="1", show_default=True,
@@ -75,6 +82,7 @@ def assemble(
     run_pasa: bool,
     jaccard_clip: bool,
     splice_permissive: bool,
+    diagnose_softclips: bool,
     code: str,
     memory_gb: int | None,
     force: bool,
@@ -120,6 +128,7 @@ def assemble(
         align_mode=align_mode,
         jaccard_clip=jaccard_clip,
         splice_permissive=splice_permissive,
+        diagnose_softclips=diagnose_softclips,
         genetic_code=code,
         left_reads=left.resolve() if left else None,
         right_reads=right.resolve() if right else None,

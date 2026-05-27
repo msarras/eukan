@@ -17,12 +17,18 @@ import pysam
 import pytest
 
 from eukan.assembly.bam_diagnostic import (
+    DiagnosticReport,
+    IntronStats,
+    LocusConsistencyStats,
+    SoftClipStats,
     _cluster_key,
     _dinucleotide,
     _extract_clips,
     _hamming_distance,
+    _is_low_complexity,
     _reverse_complement,
     _walk_introns,
+    compute_verdict,
     diagnose_bam,
 )
 from eukan.infra.genome import ContigIndex
@@ -562,23 +568,84 @@ def test_singleton_locus_counted_separately(tmp_path, synthetic_genome):
 
 def test_low_complexity_helper():
     """`_is_low_complexity` should reject poly-runs but pass real motifs."""
-    # Direct import from the experiment driver — purely a presentation helper
-    # there, but worth a unit test so the verdict thresholds stay sane.
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "softclip_experiment",
-        Path(__file__).resolve().parent / "softclip_experiment.py",
-    )
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    assert _is_low_complexity("AAAAAAAAAAAA")
+    assert _is_low_complexity("TTTTTTTTTT")
+    assert _is_low_complexity("AAAAAAAAAACC")
+    assert not _is_low_complexity("CTGTACTTTATT")   # SL motif, T=5/12
+    assert not _is_low_complexity("AGAACATGGTCG")
+    assert not _is_low_complexity("")               # empty stays False
 
-    assert mod._is_low_complexity("AAAAAAAAAAAA")
-    assert mod._is_low_complexity("TTTTTTTTTT")
-    assert mod._is_low_complexity("AAAAAAAAAACC")
-    assert not mod._is_low_complexity("CTGTACTTTATT")   # SL motif, T=5/12
-    assert not mod._is_low_complexity("AGAACATGGTCG")
-    assert not mod._is_low_complexity("")               # empty stays False
+
+def _make_report(
+    top_clusters: list[tuple[str, int, int]],
+    canonical_pct: float,
+    by_dinucleotide: dict[str, int] | None = None,
+    n_introns_total: int = 1000,
+    n_loci_consistent: int = 100,
+    motif_share_histogram: dict[str, int] | None = None,
+) -> DiagnosticReport:
+    """Build a synthetic DiagnosticReport for verdict-only unit tests."""
+    soft = SoftClipStats(
+        n_reads_scanned=10_000, n_reads_with_clip=1_000,
+        n_clips_total=1_000, n_clips_by_side={"5p": 1_000, "3p": 0},
+        n_loci=500, n_clusters=len(top_clusters),
+        cluster_to_loci={k: n_loci for k, n_loci, _ in top_clusters},
+        cluster_to_reads={k: n_reads for k, _, n_reads in top_clusters},
+        cluster_examples={k: k for k, _, _ in top_clusters},
+        top_clusters=top_clusters,
+    )
+    intron = IntronStats(
+        n_introns_total=n_introns_total,
+        by_dinucleotide=by_dinucleotide or {"GT-AG": int(n_introns_total * canonical_pct / 100)},
+        canonical_pct=canonical_pct,
+    )
+    lc = LocusConsistencyStats(
+        n_loci_total=500, n_loci_singleton=400,
+        n_loci_consistent=n_loci_consistent,
+        n_loci_inconsistent=0, n_loci_short_only=0,
+        motif_share_histogram=motif_share_histogram or {},
+    )
+    return DiagnosticReport(softclip=soft, intron=intron, locus_consistency=lc)
+
+
+def test_compute_verdict_trans_splicing_strong():
+    """Top cluster ≥1K loci, ≥10K reads + canonical_pct ≥ 95% → STRONG / ABSENT."""
+    report = _make_report(
+        top_clusters=[("ATCGATCGATCG", 2000, 20_000)],
+        canonical_pct=99.0,
+    )
+    verdict = compute_verdict(report)
+    assert verdict.trans_splicing.call == "STRONG"
+    assert verdict.trans_splicing.top_non_trivial_cluster_key == "ATCGATCGATCG"
+    assert verdict.non_canonical_splice.call == "ABSENT"
+
+
+def test_compute_verdict_non_canonical_extensive():
+    """Top cluster too small + canonical_pct < 80% → ABSENT / EXTENSIVE."""
+    report = _make_report(
+        top_clusters=[("ATCGATCGATCG", 20, 500)],  # below MODERATE threshold
+        canonical_pct=55.0,
+        by_dinucleotide={"GT-AG": 300, "CT-AC": 250, "CT-CG": 200, "CT-CT": 100},
+    )
+    verdict = compute_verdict(report)
+    assert verdict.trans_splicing.call == "ABSENT"
+    assert verdict.non_canonical_splice.call == "EXTENSIVE"
+    # Top non-canonical dinuc reported with its percentage
+    assert "CT-CG" in verdict.non_canonical_splice.top_non_canonical_dinuc
+
+
+def test_compute_verdict_skips_low_complexity_top_cluster():
+    """First non-trivial cluster is picked, even if a poly-run is more populous."""
+    report = _make_report(
+        top_clusters=[
+            ("TTTTTTTTTTTT", 5000, 50_000),    # low-complexity, must be skipped
+            ("ATCGATCGATCG", 500, 5_000),      # MODERATE level
+        ],
+        canonical_pct=99.0,
+    )
+    verdict = compute_verdict(report)
+    assert verdict.trans_splicing.top_non_trivial_cluster_key == "ATCGATCGATCG"
+    assert verdict.trans_splicing.call == "MODERATE"
 
 
 def test_hamming_distance_helper():

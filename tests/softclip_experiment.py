@@ -40,8 +40,6 @@ _PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from collections import Counter
-
 import click
 
 from eukan.assembly.bam_diagnostic import (
@@ -49,7 +47,10 @@ from eukan.assembly.bam_diagnostic import (
     IntronStats,
     LocusConsistencyStats,
     SoftClipStats,
+    Verdict,
+    compute_verdict,
     diagnose_bam,
+    to_summary_dict,
 )
 
 BASE = Path(__file__).resolve().parent.parent
@@ -102,113 +103,26 @@ def _print_summary(label: str, soft: SoftClipStats, intron: IntronStats) -> None
             click.echo(f"    {dinuc:<6}  {n:>12,}  ({_pct(n, intron.n_introns_total)})")
 
 
-def _is_low_complexity(key: str, threshold: float = 0.7) -> bool:
-    """True if any single base accounts for more than ``threshold`` of ``key``.
-
-    Used to skip poly-A / poly-T / similar near-mononucleotide cluster keys
-    when picking the "top non-trivial cluster" for the verdict. The 0.7
-    threshold passes SL motifs like ``CTGTACTTTATT`` (T=5/12=0.42) and
-    real intron sequences but rejects pure runs.
-    """
-    if not key:
-        return False
-    counts = Counter(key)
-    return max(counts.values()) / len(key) > threshold
-
-
-def _first_non_trivial_top_cluster(
-    soft: SoftClipStats,
-) -> tuple[str, int, int] | None:
-    """Walk ``soft.top_clusters`` and return the first non-low-complexity row."""
-    for key, n_loci, n_reads in soft.top_clusters:
-        if not _is_low_complexity(key):
-            return key, n_loci, n_reads
-    return None
-
-
-def _compute_verdict(
-    soft: SoftClipStats, intron: IntronStats, lc: LocusConsistencyStats,
-) -> dict:
-    """Compute categorical empirical-verdict labels + supporting numbers.
-
-    Heuristic thresholds (printed alongside numbers for user override):
-      - trans-splicing STRONG:    top non-trivial cluster ≥ 1000 loci AND ≥ 10,000 reads
-      - trans-splicing MODERATE:  top non-trivial cluster ≥ 100 loci AND ≥ 1000 reads
-      - trans-splicing ABSENT:    otherwise
-      - non-canonical splice EXTENSIVE: canonical_pct < 80%
-      - non-canonical splice MODERATE:  80% ≤ canonical_pct < 95%
-      - non-canonical splice ABSENT:    canonical_pct ≥ 95%
-    """
-    top = _first_non_trivial_top_cluster(soft)
-    if top is not None:
-        key, n_loci, n_reads = top
-        if n_loci >= 1000 and n_reads >= 10_000:
-            ts_call = "STRONG"
-        elif n_loci >= 100 and n_reads >= 1000:
-            ts_call = "MODERATE"
-        else:
-            ts_call = "ABSENT"
-    else:
-        key, n_loci, n_reads = "", 0, 0
-        ts_call = "ABSENT"
-
-    sl_bucket_pct = 0.0
-    if lc.n_loci_consistent:
-        sl_bucket_pct = 100.0 * lc.motif_share_histogram.get(">1000", 0) / lc.n_loci_consistent
-
-    if intron.canonical_pct < 80.0:
-        nc_call = "EXTENSIVE"
-    elif intron.canonical_pct < 95.0:
-        nc_call = "MODERATE"
-    else:
-        nc_call = "ABSENT"
-
-    # Top non-canonical dinucleotide (>1% of introns, excluding canonical pair).
-    nc_top_label = "none above 1%"
-    for dinuc, n in intron.by_dinucleotide.items():
-        if dinuc in ("GT-AG", "CT-AC"):
-            continue
-        pct = 100.0 * n / intron.n_introns_total if intron.n_introns_total else 0.0
-        if pct >= 1.0:
-            nc_top_label = f"{dinuc} {pct:.2f}%"
-        break
-
-    return {
-        "trans_splicing": {
-            "call": ts_call,
-            "top_non_trivial_cluster_key": key,
-            "top_non_trivial_cluster_n_loci": n_loci,
-            "top_non_trivial_cluster_n_reads": n_reads,
-            "sl_bucket_pct_of_consistent": sl_bucket_pct,
-        },
-        "non_canonical_splice": {
-            "call": nc_call,
-            "canonical_pct": intron.canonical_pct,
-            "top_non_canonical_dinuc": nc_top_label,
-        },
-    }
-
-
-def _print_verdict(verdict: dict) -> None:
-    ts = verdict["trans_splicing"]
-    nc = verdict["non_canonical_splice"]
+def _print_verdict(verdict: Verdict) -> None:
+    ts = verdict.trans_splicing
+    nc = verdict.non_canonical_splice
     click.echo("\n  Empirical verdict:")
-    click.echo(f"    Trans-splicing: {ts['call']}")
-    if ts["top_non_trivial_cluster_key"]:
+    click.echo(f"    Trans-splicing: {ts.call}")
+    if ts.top_non_trivial_cluster_key:
         click.echo(
-            f"      Top non-trivial cluster: {ts['top_non_trivial_cluster_key']} "
-            f"({ts['top_non_trivial_cluster_n_loci']:,} loci, "
-            f"{ts['top_non_trivial_cluster_n_reads']:,} reads)"
+            f"      Top non-trivial cluster: {ts.top_non_trivial_cluster_key} "
+            f"({ts.top_non_trivial_cluster_n_loci:,} loci, "
+            f"{ts.top_non_trivial_cluster_n_reads:,} reads)"
         )
     else:
         click.echo("      Top non-trivial cluster: (none — all top clusters are low-complexity)")
     click.echo(
         f"      Motif-share bucket >1000: "
-        f"{ts['sl_bucket_pct_of_consistent']:.2f}% of consistent loci"
+        f"{ts.sl_bucket_pct_of_consistent:.2f}% of consistent loci"
     )
-    click.echo(f"    Non-canonical splice: {nc['call']}")
-    click.echo(f"      Canonical intron fraction: {nc['canonical_pct']:.2f}%")
-    click.echo(f"      Top non-canonical dinuc: {nc['top_non_canonical_dinuc']}")
+    click.echo(f"    Non-canonical splice: {nc.call}")
+    click.echo(f"      Canonical intron fraction: {nc.canonical_pct:.2f}%")
+    click.echo(f"      Top non-canonical dinuc: {nc.top_non_canonical_dinuc}")
 
 
 def _print_top_clusters(soft: SoftClipStats) -> None:
@@ -257,62 +171,12 @@ def _print_locus_consistency(lc: LocusConsistencyStats) -> None:
             )
 
 
-def _slim_json_payload(
-    report: DiagnosticReport, verdict: dict | None = None,
-) -> dict:
-    soft = report.softclip
-    intron = report.intron
-    lc = report.locus_consistency
-    payload: dict = {
-        "softclip": {
-            "n_reads_scanned": soft.n_reads_scanned,
-            "n_reads_with_clip": soft.n_reads_with_clip,
-            "n_clips_total": soft.n_clips_total,
-            "n_clips_by_side": soft.n_clips_by_side,
-            "n_loci": soft.n_loci,
-            "n_clusters": soft.n_clusters,
-            "top_clusters": [
-                {
-                    "key": k, "n_loci": n_loci, "n_reads": n_reads,
-                    "example": soft.cluster_examples.get(k, ""),
-                }
-                for k, n_loci, n_reads in soft.top_clusters
-            ],
-        },
-        "intron": {
-            "n_introns_total": intron.n_introns_total,
-            "canonical_pct": intron.canonical_pct,
-            "by_dinucleotide": intron.by_dinucleotide,
-        },
-        "locus_consistency": {
-            "n_loci_total": lc.n_loci_total,
-            "n_loci_singleton": lc.n_loci_singleton,
-            "n_loci_consistent": lc.n_loci_consistent,
-            "n_loci_inconsistent": lc.n_loci_inconsistent,
-            "n_loci_short_only": lc.n_loci_short_only,
-            "motif_share_histogram": lc.motif_share_histogram,
-            "deepest_loci": [
-                {
-                    "chrom": r.chrom, "pos": r.pos, "side": r.side,
-                    "n_clips": r.n_clips, "status": r.status,
-                    "motif_key": r.motif_key, "motif_share": r.motif_share,
-                    "longest_clip": r.longest_clip,
-                }
-                for r in lc.deepest_loci
-            ],
-        },
-    }
-    if verdict is not None:
-        payload["verdict"] = verdict
-    return payload
-
-
 def _write_outputs(
-    out_dir: Path, report: DiagnosticReport, verdict: dict | None = None,
+    out_dir: Path, report: DiagnosticReport, verdict: Verdict,
 ) -> None:
     json_path = out_dir / "softclip_diagnostic.json"
     with open(json_path, "w") as f:
-        json.dump(_slim_json_payload(report, verdict), f, indent=2)
+        json.dump(to_summary_dict(report, verdict), f, indent=2)
     click.echo(f"\n  wrote {json_path}")
 
     clusters_path = out_dir / "softclip_diagnostic_clusters.tsv"
@@ -374,9 +238,7 @@ def _run_one(label: str, bam: Path, genome: Path, *, min_clip_len: int,
     _print_summary(label, report.softclip, report.intron)
     _print_top_clusters(report.softclip)
     _print_locus_consistency(report.locus_consistency)
-    verdict = _compute_verdict(
-        report.softclip, report.intron, report.locus_consistency,
-    )
+    verdict = compute_verdict(report)
     _print_verdict(verdict)
     _write_outputs(bam.parent, report, verdict)
 

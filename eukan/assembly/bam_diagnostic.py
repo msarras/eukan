@@ -217,6 +217,34 @@ class DiagnosticReport:
     locus_consistency: LocusConsistencyStats
 
 
+@dataclass
+class TransSplicingCall:
+    """Categorical verdict on whether trans-splicing is present."""
+
+    call: str  # "STRONG" | "MODERATE" | "ABSENT"
+    top_non_trivial_cluster_key: str
+    top_non_trivial_cluster_n_loci: int
+    top_non_trivial_cluster_n_reads: int
+    sl_bucket_pct_of_consistent: float
+
+
+@dataclass
+class NonCanonicalSpliceCall:
+    """Categorical verdict on non-canonical splice prevalence."""
+
+    call: str  # "EXTENSIVE" | "MODERATE" | "ABSENT"
+    canonical_pct: float
+    top_non_canonical_dinuc: str
+
+
+@dataclass
+class Verdict:
+    """Empirical-verdict labels + supporting numbers from a BAM walk."""
+
+    trans_splicing: TransSplicingCall
+    non_canonical_splice: NonCanonicalSpliceCall
+
+
 def _iter_primary_alignments(
     bam: pysam.AlignmentFile, *, min_mapq: int,
 ) -> Iterable[pysam.AlignedSegment]:
@@ -611,3 +639,177 @@ def _build_locus_consistency_stats(
         deepest_loci=deepest,
         all_rows=all_rows,
     )
+
+
+# ---------------------------------------------------------------------------
+# Empirical verdict — categorical calls on top of the raw stats
+# ---------------------------------------------------------------------------
+
+
+def _is_low_complexity(key: str, threshold: float = 0.7) -> bool:
+    """True if any single base accounts for more than ``threshold`` of ``key``.
+
+    Used to skip poly-A / poly-T / similar near-mononucleotide cluster keys
+    when picking the "top non-trivial cluster" for the verdict. The 0.7
+    threshold passes SL motifs like ``CTGTACTTTATT`` (T=5/12=0.42) and
+    real intron sequences but rejects pure runs.
+    """
+    if not key:
+        return False
+    counts = Counter(key)
+    return max(counts.values()) / len(key) > threshold
+
+
+def _first_non_trivial_top_cluster(
+    soft: SoftClipStats,
+) -> tuple[str, int, int] | None:
+    """Walk ``soft.top_clusters`` and return the first non-low-complexity row."""
+    for key, n_loci, n_reads in soft.top_clusters:
+        if not _is_low_complexity(key):
+            return key, n_loci, n_reads
+    return None
+
+
+def compute_verdict(report: DiagnosticReport) -> Verdict:
+    """Derive categorical empirical-verdict calls + supporting numbers.
+
+    Heuristic thresholds (subject to revision as more datasets come in):
+
+    Trans-splicing:
+      - STRONG    if top non-trivial cluster ≥ 1000 loci AND ≥ 10,000 reads
+      - MODERATE  if top non-trivial cluster ≥  100 loci AND ≥  1,000 reads
+      - ABSENT    otherwise
+
+    Non-canonical splice:
+      - EXTENSIVE if canonical_pct < 80%
+      - MODERATE  if 80% ≤ canonical_pct < 95%
+      - ABSENT    if canonical_pct ≥ 95%
+
+    The supporting numbers (top-cluster key/loci/reads, sl-bucket %,
+    canonical_pct, top non-canonical dinuc) are kept alongside the
+    label so callers can override the judgement without re-reading
+    the spec.
+    """
+    soft = report.softclip
+    intron = report.intron
+    lc = report.locus_consistency
+
+    top = _first_non_trivial_top_cluster(soft)
+    if top is not None:
+        key, n_loci, n_reads = top
+        if n_loci >= 1000 and n_reads >= 10_000:
+            ts_call = "STRONG"
+        elif n_loci >= 100 and n_reads >= 1000:
+            ts_call = "MODERATE"
+        else:
+            ts_call = "ABSENT"
+    else:
+        key, n_loci, n_reads = "", 0, 0
+        ts_call = "ABSENT"
+
+    sl_bucket_pct = 0.0
+    if lc.n_loci_consistent:
+        sl_bucket_pct = 100.0 * lc.motif_share_histogram.get(">1000", 0) / lc.n_loci_consistent
+
+    if intron.canonical_pct < 80.0:
+        nc_call = "EXTENSIVE"
+    elif intron.canonical_pct < 95.0:
+        nc_call = "MODERATE"
+    else:
+        nc_call = "ABSENT"
+
+    nc_top_label = "none above 1%"
+    for dinuc, n in intron.by_dinucleotide.items():
+        if dinuc in ("GT-AG", "CT-AC"):
+            continue
+        pct = 100.0 * n / intron.n_introns_total if intron.n_introns_total else 0.0
+        if pct >= 1.0:
+            nc_top_label = f"{dinuc} {pct:.2f}%"
+        break
+
+    return Verdict(
+        trans_splicing=TransSplicingCall(
+            call=ts_call,
+            top_non_trivial_cluster_key=key,
+            top_non_trivial_cluster_n_loci=n_loci,
+            top_non_trivial_cluster_n_reads=n_reads,
+            sl_bucket_pct_of_consistent=sl_bucket_pct,
+        ),
+        non_canonical_splice=NonCanonicalSpliceCall(
+            call=nc_call,
+            canonical_pct=intron.canonical_pct,
+            top_non_canonical_dinuc=nc_top_label,
+        ),
+    )
+
+
+def to_summary_dict(report: DiagnosticReport, verdict: Verdict) -> dict:
+    """Pack a slim summary of the diagnostic + verdict for JSON output.
+
+    Includes scalars + histograms + top-15 clusters + top-15 deepest
+    loci + the full verdict — but NOT the per-cluster ``cluster_to_*``
+    maps or the per-locus ``all_rows`` (those are too heavy for a
+    routine pipeline summary; the experiment driver still dumps them
+    as TSV side files).
+    """
+    soft = report.softclip
+    intron = report.intron
+    lc = report.locus_consistency
+    return {
+        "softclip": {
+            "n_reads_scanned": soft.n_reads_scanned,
+            "n_reads_with_clip": soft.n_reads_with_clip,
+            "n_clips_total": soft.n_clips_total,
+            "n_clips_by_side": soft.n_clips_by_side,
+            "n_loci": soft.n_loci,
+            "n_clusters": soft.n_clusters,
+            "top_clusters": [
+                {
+                    "key": k, "n_loci": n_loci, "n_reads": n_reads,
+                    "example": soft.cluster_examples.get(k, ""),
+                }
+                for k, n_loci, n_reads in soft.top_clusters
+            ],
+        },
+        "intron": {
+            "n_introns_total": intron.n_introns_total,
+            "canonical_pct": intron.canonical_pct,
+            "by_dinucleotide": intron.by_dinucleotide,
+        },
+        "locus_consistency": {
+            "n_loci_total": lc.n_loci_total,
+            "n_loci_singleton": lc.n_loci_singleton,
+            "n_loci_consistent": lc.n_loci_consistent,
+            "n_loci_inconsistent": lc.n_loci_inconsistent,
+            "n_loci_short_only": lc.n_loci_short_only,
+            "motif_share_histogram": lc.motif_share_histogram,
+            "deepest_loci": [
+                {
+                    "chrom": r.chrom, "pos": r.pos, "side": r.side,
+                    "n_clips": r.n_clips, "status": r.status,
+                    "motif_key": r.motif_key, "motif_share": r.motif_share,
+                    "longest_clip": r.longest_clip,
+                }
+                for r in lc.deepest_loci
+            ],
+        },
+        "verdict": {
+            "trans_splicing": {
+                "call": verdict.trans_splicing.call,
+                "top_non_trivial_cluster_key":
+                    verdict.trans_splicing.top_non_trivial_cluster_key,
+                "top_non_trivial_cluster_n_loci":
+                    verdict.trans_splicing.top_non_trivial_cluster_n_loci,
+                "top_non_trivial_cluster_n_reads":
+                    verdict.trans_splicing.top_non_trivial_cluster_n_reads,
+                "sl_bucket_pct_of_consistent":
+                    verdict.trans_splicing.sl_bucket_pct_of_consistent,
+            },
+            "non_canonical_splice": {
+                "call": verdict.non_canonical_splice.call,
+                "canonical_pct": verdict.non_canonical_splice.canonical_pct,
+                "top_non_canonical_dinuc":
+                    verdict.non_canonical_splice.top_non_canonical_dinuc,
+            },
+        },
+    }

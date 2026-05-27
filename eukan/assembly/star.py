@@ -94,7 +94,9 @@ def map_reads(config: AssemblyConfig) -> None:
     _log_mapping_rate(wd)
 
     # Generate hints from splice junctions and analyze splice sites
-    _generate_hints_from_star(wd, config.genome)
+    _generate_hints_from_star(
+        wd, config.genome, diagnose=config.diagnose_softclips,
+    )
 
     # Cleanup build index (large)
     shutil.rmtree(index_dir, ignore_errors=True)
@@ -197,12 +199,70 @@ def _analyze_splice_sites(sj_file: Path, genome: Path, wd: Path) -> None:
         )
 
 
-def _generate_hints_from_star(wd: Path, genome: Path) -> None:
+def _run_softclip_diagnostic(wd: Path, genome: Path) -> None:
+    """Walk the STAR BAM for soft-clip + intron motifs and log a verdict.
+
+    Idempotent: if the summary JSON already exists, this is a no-op. The
+    verdict surfaces trans-splicing and non-canonical splice prevalence
+    so the user knows whether downstream gene prediction will need
+    special handling (read pre-processing for trans-splicing; the
+    ``--splice-permissive`` flag for non-canonical splice landscapes).
+    """
+    from eukan.assembly.bam_diagnostic import (
+        compute_verdict,
+        diagnose_bam,
+        to_summary_dict,
+    )
+
+    bam = wd / "STAR_Aligned.sortedByCoord.out.bam"
+    summary_path = wd / Artifact.SOFTCLIP_DIAGNOSTIC.value
+    if not bam.exists():
+        return
+    if summary_path.exists():
+        log.info("Soft-clip diagnostic already produced %s, skipping", summary_path.name)
+        return
+
+    log.info("Running soft-clip / intron diagnostic over %s...", bam.name)
+    report = diagnose_bam(bam, genome)
+    verdict = compute_verdict(report)
+
+    with open(summary_path, "w") as f:
+        json.dump(to_summary_dict(report, verdict), f, indent=2)
+
+    ts = verdict.trans_splicing
+    if ts.call in ("STRONG", "MODERATE"):
+        log.warning(
+            "Trans-splicing signal %s: top motif %s spans %d loci (%d reads). "
+            "Reads may need splice-leader trimming before annotation.",
+            ts.call,
+            ts.top_non_trivial_cluster_key,
+            ts.top_non_trivial_cluster_n_loci,
+            ts.top_non_trivial_cluster_n_reads,
+        )
+    else:
+        log.info("Trans-splicing signal: ABSENT")
+
+    nc = verdict.non_canonical_splice
+    if nc.call in ("EXTENSIVE", "MODERATE"):
+        log.warning(
+            "Non-canonical splice signal %s: canonical fraction %.2f%% "
+            "(top non-canonical %s). Consider --splice-permissive on the assemble step.",
+            nc.call, nc.canonical_pct, nc.top_non_canonical_dinuc,
+        )
+    else:
+        log.info("Canonical splice site usage typical: %.2f%%", nc.canonical_pct)
+
+
+def _generate_hints_from_star(
+    wd: Path, genome: Path, *, diagnose: bool = True,
+) -> None:
     """Generate AUGUSTUS hints from STAR splice junction and coverage output."""
     # Parse splice junctions into intron hints
     sj_file = wd / "STAR_SJ.out.tab"
     if sj_file.exists():
         _analyze_splice_sites(sj_file, genome, wd)
+    if diagnose:
+        _run_softclip_diagnostic(wd, genome)
     if sj_file.exists():
         strand_map = {"0": ".", "1": "+", "2": "-"}
         with open(sj_file) as fin, open(wd / "hints_introns.gff", "w") as fout:
