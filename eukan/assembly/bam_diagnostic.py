@@ -131,6 +131,65 @@ def _canonicalize_keys(
     return canonical
 
 
+def _cluster_consensus(
+    clip_seqs: list[str],
+    side: str,
+    *,
+    min_coverage: int = 5,
+    min_majority_fraction: float = 0.6,
+    max_extension: int = 60,
+) -> str:
+    """Majority-base consensus across clips, anchored at the alignment edge.
+
+    For 5p clips the anchor is the rightmost base of the clip (the bp
+    touching the alignment); the consensus extends leftward (upstream).
+    For 3p clips the anchor is the leftmost base; extension is rightward
+    (downstream).
+
+    Walks columns outward from the anchor. At each column, takes the
+    majority base if coverage >= ``min_coverage`` AND
+    majority/coverage >= ``min_majority_fraction``. Stops at the first
+    failing column or at ``max_extension``. Non-ACGT bases (``N`` etc.)
+    don't contribute to the count for that column. Returns the consensus
+    in 5'->3' order (the anchor base is at the right end for 5p, left
+    end for 3p). Empty string if column 0 fails.
+    """
+    if not clip_seqs:
+        return ""
+    upper = [s.upper() for s in clip_seqs]
+
+    bases: list[str] = []
+    for col in range(max_extension):
+        counts: Counter[str] = Counter()
+        for s in upper:
+            if side == "5p":
+                idx = len(s) - 1 - col
+                if idx < 0:
+                    continue
+            else:
+                idx = col
+                if idx >= len(s):
+                    continue
+            ch = s[idx]
+            if ch in _ALPHABET:
+                counts[ch] += 1
+        coverage = sum(counts.values())
+        if coverage < min_coverage:
+            break
+        best, n_best = counts.most_common(1)[0]
+        if n_best / coverage < min_majority_fraction:
+            break
+        bases.append(best)
+
+    if not bases:
+        return ""
+    # For 5p, columns were collected right-to-left (anchor outward).
+    # Reverse to get 5'->3' order. For 3p, the order is already 5'->3'.
+    if side == "5p":
+        return "".join(reversed(bases))
+    return "".join(bases)
+
+
 @dataclass
 class SoftClipStats:
     """Aggregated soft-clip stats from one BAM walk."""
@@ -144,6 +203,7 @@ class SoftClipStats:
     cluster_to_loci: dict[str, int] = field(default_factory=dict)
     cluster_to_reads: dict[str, int] = field(default_factory=dict)
     cluster_examples: dict[str, str] = field(default_factory=dict)
+    cluster_consensus: dict[str, str] = field(default_factory=dict)
     top_clusters: list[tuple[str, int, int]] = field(default_factory=list)
 
 
@@ -223,6 +283,7 @@ class TransSplicingCall:
 
     call: str  # "STRONG" | "MODERATE" | "ABSENT"
     top_non_trivial_cluster_key: str
+    top_non_trivial_cluster_consensus: str
     top_non_trivial_cluster_n_loci: int
     top_non_trivial_cluster_n_reads: int
     sl_bucket_pct_of_consistent: float
@@ -434,6 +495,7 @@ def diagnose_bam(
     hamming_tolerance: int = 2,
     cluster_hamming_tolerance: int = 1,
     min_consistency_fraction: float = 0.95,
+    consensus_min_majority_fraction: float = 0.6,
 ) -> DiagnosticReport:
     """Stream a BAM and return aggregated soft-clip + intron + locus stats.
 
@@ -456,6 +518,11 @@ def diagnose_bam(
 
     Set the Hamming knobs to 0 to disable; set the fraction to 1.0 to
     require all-tracked-keys-must-match.
+
+    ``consensus_min_majority_fraction`` controls how strict the
+    per-column majority vote is when building a cluster's consensus
+    sequence. Lower values let the consensus extend further into noisier
+    columns; higher values terminate sooner. Default 0.6.
     """
     import pysam
 
@@ -540,6 +607,47 @@ def diagnose_bam(
     )[:top_n]
     top_clusters = [(k, n_loci, canon_cluster_reads[k]) for k, n_loci in top_keys]
 
+    # Build a consensus sequence for each top-N cluster from its member
+    # longest-clip sequences on the dominant side. Only top-N to bound
+    # work on long-tail clusters whose consensus is never reported.
+    # ``LocusData.longest_clip`` is the longest soft-clip of any read at
+    # the locus, regardless of its K-bp anchor. At a deep SL locus, an
+    # unrelated long contamination read can win that slot and pollute the
+    # consensus. Filter to clips whose own K-bp anchor is one of the
+    # cluster's raw keys — keeps only reads that ARE the SL/motif, not
+    # co-located off-anchor contamination.
+    canon_to_raw: dict[str, set[str]] = {}
+    for raw_key, seed in canonical_map.items():
+        canon_to_raw.setdefault(seed, set()).add(raw_key)
+
+    canon_cluster_consensus: dict[str, str] = {}
+    for seed, _n_loci, _n_reads in top_clusters:
+        loci = canon_cluster_loci.get(seed, set())
+        raw_keys = canon_to_raw.get(seed, {seed})
+        loci_by_side: dict[str, list[tuple[str, int, str]]] = {"5p": [], "3p": []}
+        for loc in loci:
+            loci_by_side[loc[2]].append(loc)
+        side_counts = Counter({s: len(v) for s, v in loci_by_side.items()})
+        if not any(side_counts.values()):
+            continue
+        dominant_side = side_counts.most_common(1)[0][0]
+        clips: list[str] = []
+        for loc in loci_by_side[dominant_side]:
+            lc = locus_data[loc].longest_clip
+            if len(lc) < cluster_key_len:
+                continue
+            if _cluster_key(dominant_side, lc, cluster_key_len) not in raw_keys:
+                continue
+            clips.append(lc)
+        if not clips:
+            continue
+        consensus = _cluster_consensus(
+            clips, dominant_side,
+            min_majority_fraction=consensus_min_majority_fraction,
+        )
+        if consensus:
+            canon_cluster_consensus[seed] = consensus
+
     soft = SoftClipStats(
         n_reads_scanned=n_reads_scanned,
         n_reads_with_clip=n_reads_with_clip,
@@ -550,6 +658,7 @@ def diagnose_bam(
         cluster_to_loci=canon_cluster_to_loci_count,
         cluster_to_reads=dict(canon_cluster_reads),
         cluster_examples=canon_cluster_examples,
+        cluster_consensus=canon_cluster_consensus,
         top_clusters=top_clusters,
     )
 
@@ -731,6 +840,7 @@ def compute_verdict(report: DiagnosticReport) -> Verdict:
         trans_splicing=TransSplicingCall(
             call=ts_call,
             top_non_trivial_cluster_key=key,
+            top_non_trivial_cluster_consensus=soft.cluster_consensus.get(key, ""),
             top_non_trivial_cluster_n_loci=n_loci,
             top_non_trivial_cluster_n_reads=n_reads,
             sl_bucket_pct_of_consistent=sl_bucket_pct,
@@ -767,6 +877,7 @@ def to_summary_dict(report: DiagnosticReport, verdict: Verdict) -> dict:
                 {
                     "key": k, "n_loci": n_loci, "n_reads": n_reads,
                     "example": soft.cluster_examples.get(k, ""),
+                    "consensus": soft.cluster_consensus.get(k, ""),
                 }
                 for k, n_loci, n_reads in soft.top_clusters
             ],
@@ -798,6 +909,8 @@ def to_summary_dict(report: DiagnosticReport, verdict: Verdict) -> dict:
                 "call": verdict.trans_splicing.call,
                 "top_non_trivial_cluster_key":
                     verdict.trans_splicing.top_non_trivial_cluster_key,
+                "top_non_trivial_cluster_consensus":
+                    verdict.trans_splicing.top_non_trivial_cluster_consensus,
                 "top_non_trivial_cluster_n_loci":
                     verdict.trans_splicing.top_non_trivial_cluster_n_loci,
                 "top_non_trivial_cluster_n_reads":

@@ -21,6 +21,7 @@ from eukan.assembly.bam_diagnostic import (
     IntronStats,
     LocusConsistencyStats,
     SoftClipStats,
+    _cluster_consensus,
     _cluster_key,
     _dinucleotide,
     _extract_clips,
@@ -576,6 +577,101 @@ def test_low_complexity_helper():
     assert not _is_low_complexity("")               # empty stays False
 
 
+def test_cluster_consensus_extends_beyond_key_5p():
+    """Clips that all share a 24-bp 5p motif yield the full 24-bp consensus."""
+    motif = "GAGAGAGAGAGACTGTACTTTATT"  # 24 bp; last 12 = anchor key
+    clips = [motif] * 30
+    assert _cluster_consensus(clips, "5p") == motif
+
+
+def test_cluster_consensus_extends_beyond_key_3p():
+    """Mirror of the 5p test: clips share a 3p motif starting at the anchor."""
+    motif = "AATAAACATGTCAGAGAGAGAGAG"  # 24 bp; first 12 = anchor key
+    clips = [motif] * 30
+    assert _cluster_consensus(clips, "3p") == motif
+
+
+def test_cluster_consensus_truncates_at_low_coverage_5p():
+    """When only a few clips extend past the anchor, consensus stops at the anchor."""
+    long_motif = "GAGAGAGAGAGACTGTACTTTATT"  # 24 bp
+    anchor = "CTGTACTTTATT"                   # 12 bp (just the anchor)
+    # 30 anchor-only + 3 long. min_coverage=5 → column past anchor has only 3.
+    clips = [anchor] * 30 + [long_motif] * 3
+    assert _cluster_consensus(clips, "5p") == anchor
+
+
+def test_cluster_consensus_breaks_on_split_majority():
+    """A 50/50 base split at a column terminates the consensus before that column."""
+    # 10 clips with 'A' at the extended position, 10 with 'T'; anchor agreed
+    # on all. min_majority_fraction=0.6 → the split column fails.
+    clips_a = ["ACTGTACTTTATT"] * 10  # 13 bp; col -13 = 'A'
+    clips_t = ["TCTGTACTTTATT"] * 10  # 13 bp; col -13 = 'T'
+    consensus = _cluster_consensus(clips_a + clips_t, "5p")
+    assert consensus == "CTGTACTTTATT"  # just the agreed 12-bp anchor
+
+
+def test_cluster_consensus_empty_input():
+    """Empty input returns empty string, no exception."""
+    assert _cluster_consensus([], "5p") == ""
+    assert _cluster_consensus([], "3p") == ""
+
+
+def test_cluster_consensus_min_majority_fraction_relaxed():
+    """Lowering ``min_majority_fraction`` lets the consensus extend past a noisy column."""
+    # Last 12 bp of both clips = "CTGTACTTTATT" (anchor key, agreed).
+    # Differ at idx 11 (col 12): clip_a has 'A', clip_t has 'T'.
+    # Cols 13-23 agree again (the "AGAGAGAGAG" prefix).
+    clip_a = "AGAGAGAGAGAACTGTACTTTATT"
+    clip_t = "AGAGAGAGAGATCTGTACTTTATT"
+    clips = [clip_a] * 6 + [clip_t] * 5  # col 12 majority 6/11 = 54.5%
+
+    # Default 0.6 → col 12 fails, consensus stops at the anchor.
+    assert _cluster_consensus(clips, "5p") == "CTGTACTTTATT"
+
+    # 0.4 → col 12 passes (54.5% > 40%); consensus continues to the
+    # 100%-agreed prefix and recovers the full clip.
+    relaxed = _cluster_consensus(clips, "5p", min_majority_fraction=0.4)
+    assert relaxed == clip_a
+
+
+def test_diagnose_bam_consensus_excludes_off_anchor_longest_clip(
+    tmp_path, synthetic_genome,
+):
+    """The cluster consensus ignores per-locus ``longest_clip`` when its
+    K-bp anchor doesn't match the cluster's raw keys.
+
+    Setup: 6 SL-only loci with 18-bp clips ending in CTGTACTTTATT, plus
+    5 mixed loci where each carries both a 12-bp SL read (just the
+    anchor key) and a 30-bp contamination read whose anchor is
+    ``A`` x 12. The contamination wins ``longest_clip`` at each mixed
+    locus. Without the K-bp anchor filter, contamination bases would
+    fight SL bases at column 0 (6 vs 5 → 54.5% < 60%) and the consensus
+    would collapse. With the filter the contamination is dropped and
+    the consensus recovers the full 18-bp motif.
+    """
+    sl_clip = "AATCAACTGTACTTTATT"          # 18 bp, suffix = SL key
+    sl_short = "CTGTACTTTATT"                # 12 bp, just the key
+    contam_clip = "T" * 18 + "A" * 12        # 30 bp, suffix = AAAAA…
+
+    reads: list[dict] = []
+    # 6 SL-only loci (one SL read each, well-separated positions)
+    for i in range(6):
+        reads.append(_read_with_5p_clip(f"sl{i}", 100 + i * 50, sl_clip))
+    # 5 mixed loci, each with both an SL anchor-only read and a long
+    # contamination read sharing the same alignment start
+    for i in range(5):
+        pos = 1000 + i * 50
+        reads.append(_read_with_5p_clip(f"mix_sl{i}", pos, sl_short))
+        reads.append(_read_with_5p_clip(f"mix_co{i}", pos, contam_clip))
+
+    bam = _write_bam(tmp_path / "filter.bam", [("chr1", 2000)], reads)
+    report = diagnose_bam(
+        bam, synthetic_genome, min_clip_len=8, cluster_key_len=12,
+    )
+    soft = report.softclip
+    assert soft.cluster_consensus.get("CTGTACTTTATT", "") == sl_clip
+
+
 def _make_report(
     top_clusters: list[tuple[str, int, int]],
     canonical_pct: float,
@@ -583,6 +679,7 @@ def _make_report(
     n_introns_total: int = 1000,
     n_loci_consistent: int = 100,
     motif_share_histogram: dict[str, int] | None = None,
+    cluster_consensus: dict[str, str] | None = None,
 ) -> DiagnosticReport:
     """Build a synthetic DiagnosticReport for verdict-only unit tests."""
     soft = SoftClipStats(
@@ -592,6 +689,7 @@ def _make_report(
         cluster_to_loci={k: n_loci for k, n_loci, _ in top_clusters},
         cluster_to_reads={k: n_reads for k, _, n_reads in top_clusters},
         cluster_examples={k: k for k, _, _ in top_clusters},
+        cluster_consensus=cluster_consensus or {},
         top_clusters=top_clusters,
     )
     intron = IntronStats(
@@ -613,10 +711,15 @@ def test_compute_verdict_trans_splicing_strong():
     report = _make_report(
         top_clusters=[("ATCGATCGATCG", 2000, 20_000)],
         canonical_pct=99.0,
+        cluster_consensus={"ATCGATCGATCG": "GGGGGGATCGATCGATCGATCG"},
     )
     verdict = compute_verdict(report)
     assert verdict.trans_splicing.call == "STRONG"
     assert verdict.trans_splicing.top_non_trivial_cluster_key == "ATCGATCGATCG"
+    assert (
+        verdict.trans_splicing.top_non_trivial_cluster_consensus
+        == "GGGGGGATCGATCGATCGATCG"
+    )
     assert verdict.non_canonical_splice.call == "ABSENT"
 
 

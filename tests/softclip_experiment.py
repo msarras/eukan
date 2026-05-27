@@ -114,6 +114,10 @@ def _print_verdict(verdict: Verdict) -> None:
             f"({ts.top_non_trivial_cluster_n_loci:,} loci, "
             f"{ts.top_non_trivial_cluster_n_reads:,} reads)"
         )
+        if ts.top_non_trivial_cluster_consensus:
+            click.echo(
+                f"      Consensus motif:         {ts.top_non_trivial_cluster_consensus}"
+            )
     else:
         click.echo("      Top non-trivial cluster: (none — all top clusters are low-complexity)")
     click.echo(
@@ -209,14 +213,16 @@ def _write_outputs(
 def _run_one(label: str, bam: Path, genome: Path, *, min_clip_len: int,
              cluster_key_len: int, min_mapq: int,
              hamming_tolerance: int, cluster_hamming_tolerance: int,
-             min_consistency_fraction: float) -> None:
+             min_consistency_fraction: float,
+             consensus_min_majority_fraction: float) -> None:
     click.echo(f"\nDiagnosing {label}…")
     click.echo(f"  bam:    {bam}")
     click.echo(f"  genome: {genome}")
     click.echo(
         f"  per-locus H={hamming_tolerance}, "
         f"cross-locus H={cluster_hamming_tolerance}, "
-        f"min-consistency-fraction={min_consistency_fraction}"
+        f"min-consistency-fraction={min_consistency_fraction}, "
+        f"consensus-majority={consensus_min_majority_fraction}"
     )
     if not bam.exists():
         raise click.ClickException(f"BAM not found: {bam}")
@@ -232,6 +238,7 @@ def _run_one(label: str, bam: Path, genome: Path, *, min_clip_len: int,
         hamming_tolerance=hamming_tolerance,
         cluster_hamming_tolerance=cluster_hamming_tolerance,
         min_consistency_fraction=min_consistency_fraction,
+        consensus_min_majority_fraction=consensus_min_majority_fraction,
     )
     click.echo(f"  scan complete in {time.time() - t0:.1f}s")
 
@@ -261,11 +268,14 @@ def cli() -> None:
               help="Cross-locus canonicalization: raw cluster keys within this distance of an existing seed are absorbed into it.")
 @click.option("--min-consistency-fraction", default=0.95, show_default=True, type=float,
               help="Fraction of tracked long-clip reads at a locus that must be within --hamming-tolerance of the dominant key for the locus to be marked consistent.")
+@click.option("--consensus-min-majority-fraction", default=0.6, show_default=True, type=float,
+              help="Per-column majority-vote threshold for the cluster consensus. Lower extends the consensus into noisier columns; higher terminates sooner.")
 def cmd_one(
     bam: Path, genome: Path, label: str,
     min_clip_len: int, cluster_key_len: int, min_mapq: int,
     hamming_tolerance: int, cluster_hamming_tolerance: int,
     min_consistency_fraction: float,
+    consensus_min_majority_fraction: float,
 ) -> None:
     """Run the diagnostic against one BAM + genome pair."""
     _run_one(
@@ -276,6 +286,7 @@ def cmd_one(
         hamming_tolerance=hamming_tolerance,
         cluster_hamming_tolerance=cluster_hamming_tolerance,
         min_consistency_fraction=min_consistency_fraction,
+        consensus_min_majority_fraction=consensus_min_majority_fraction,
     )
 
 
@@ -286,10 +297,12 @@ def cmd_one(
 @click.option("--hamming-tolerance", default=2, show_default=True, type=int)
 @click.option("--cluster-hamming-tolerance", default=1, show_default=True, type=int)
 @click.option("--min-consistency-fraction", default=0.95, show_default=True, type=float)
+@click.option("--consensus-min-majority-fraction", default=0.6, show_default=True, type=float)
 def cmd_run_all(
     min_clip_len: int, cluster_key_len: int, min_mapq: int,
     hamming_tolerance: int, cluster_hamming_tolerance: int,
     min_consistency_fraction: float,
+    consensus_min_majority_fraction: float,
 ) -> None:
     """Diagnose both hemistasia and flectonema using the known data paths."""
     for label, (bam, genome) in KNOWN.items():
@@ -301,6 +314,7 @@ def cmd_run_all(
             hamming_tolerance=hamming_tolerance,
             cluster_hamming_tolerance=cluster_hamming_tolerance,
             min_consistency_fraction=min_consistency_fraction,
+            consensus_min_majority_fraction=consensus_min_majority_fraction,
         )
 
 

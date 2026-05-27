@@ -231,11 +231,12 @@ def _run_softclip_diagnostic(wd: Path, genome: Path) -> None:
 
     ts = verdict.trans_splicing
     if ts.call in ("STRONG", "MODERATE"):
+        sl_label = ts.top_non_trivial_cluster_consensus or ts.top_non_trivial_cluster_key
         log.warning(
             "Trans-splicing signal %s: top motif %s spans %d loci (%d reads). "
             "Reads may need splice-leader trimming before annotation.",
             ts.call,
-            ts.top_non_trivial_cluster_key,
+            sl_label,
             ts.top_non_trivial_cluster_n_loci,
             ts.top_non_trivial_cluster_n_reads,
         )
