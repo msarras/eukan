@@ -45,6 +45,18 @@ LOCUS_KEY_CAP = 5
 
 _ALPHABET = "ACGT"
 
+# compute_verdict heuristic thresholds (subject to revision as more datasets
+# come in). Trans-splicing is called from the top non-trivial soft-clip
+# cluster's locus + read counts; non-canonical splice from the canonical
+# dinucleotide percentage.
+_TS_STRONG_MIN_LOCI = 1000
+_TS_STRONG_MIN_READS = 10_000
+_TS_MODERATE_MIN_LOCI = 100
+_TS_MODERATE_MIN_READS = 1000
+_NC_CANONICAL_PCT_EXTENSIVE = 80.0  # canonical% below this -> EXTENSIVE
+_NC_CANONICAL_PCT_MODERATE = 95.0   # canonical% below this -> MODERATE, else ABSENT
+_NC_DINUC_REPORT_MIN_PCT = 1.0      # min % for a non-canonical dinuc to be named
+
 
 def _reverse_complement(seq: str) -> str:
     return seq.translate(_RC_TABLE)[::-1]
@@ -806,9 +818,9 @@ def compute_verdict(report: DiagnosticReport) -> Verdict:
     top = _first_non_trivial_top_cluster(soft)
     if top is not None:
         key, n_loci, n_reads = top
-        if n_loci >= 1000 and n_reads >= 10_000:
+        if n_loci >= _TS_STRONG_MIN_LOCI and n_reads >= _TS_STRONG_MIN_READS:
             ts_call = "STRONG"
-        elif n_loci >= 100 and n_reads >= 1000:
+        elif n_loci >= _TS_MODERATE_MIN_LOCI and n_reads >= _TS_MODERATE_MIN_READS:
             ts_call = "MODERATE"
         else:
             ts_call = "ABSENT"
@@ -820,9 +832,9 @@ def compute_verdict(report: DiagnosticReport) -> Verdict:
     if lc.n_loci_consistent:
         sl_bucket_pct = 100.0 * lc.motif_share_histogram.get(">1000", 0) / lc.n_loci_consistent
 
-    if intron.canonical_pct < 80.0:
+    if intron.canonical_pct < _NC_CANONICAL_PCT_EXTENSIVE:
         nc_call = "EXTENSIVE"
-    elif intron.canonical_pct < 95.0:
+    elif intron.canonical_pct < _NC_CANONICAL_PCT_MODERATE:
         nc_call = "MODERATE"
     else:
         nc_call = "ABSENT"
@@ -832,7 +844,7 @@ def compute_verdict(report: DiagnosticReport) -> Verdict:
         if dinuc in ("GT-AG", "CT-AC"):
             continue
         pct = 100.0 * n / intron.n_introns_total if intron.n_introns_total else 0.0
-        if pct >= 1.0:
+        if pct >= _NC_DINUC_REPORT_MIN_PCT:
             nc_top_label = f"{dinuc} {pct:.2f}%"
         break
 

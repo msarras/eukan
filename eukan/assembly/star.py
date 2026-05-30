@@ -17,6 +17,14 @@ from eukan.settings import AssemblyConfig
 
 log = get_logger(__name__)
 
+# STAR resource/index tuning for typical small eukaryotic genomes.
+_STAR_SA_INDEX_NBASES = "3"                 # suffix-array pre-index size (small genomes)
+_STAR_GENOME_GENERATE_RAM = "40317074816"   # byte cap for --limitGenomeGenerateRAM (~37 GiB)
+_STAR_BAM_SORT_RAM = "27643756136"          # byte cap for --limitBAMsortRAM (~26 GiB)
+# --outSJfilterIntronMaxVsReadN: max intron length allowed for junctions
+# supported by 1, 2, 3+ reads respectively.
+_STAR_SJ_FILTER_INTRON_MAX_VS_READN = ("100", "300", "500")
+
 
 def _is_gzipped(path: Path) -> bool:
     """Check if a file is gzip-compressed by reading the magic bytes."""
@@ -40,8 +48,8 @@ def map_reads(config: AssemblyConfig) -> None:
         run_cmd(
             [
                 "STAR",
-                "--genomeSAindexNbases", "3",
-                "--limitGenomeGenerateRAM", "40317074816",
+                "--genomeSAindexNbases", _STAR_SA_INDEX_NBASES,
+                "--limitGenomeGenerateRAM", _STAR_GENOME_GENERATE_RAM,
                 "--runThreadN", str(config.num_cpu),
                 "--runMode", "genomeGenerate",
                 "--genomeDir", str(index_dir),
@@ -72,14 +80,14 @@ def map_reads(config: AssemblyConfig) -> None:
         "--alignEndsType", config.align_mode,
         "--readFilesIn", *reads,
         "--outSAMtype", "BAM", "SortedByCoordinate",
-        "--outSJfilterIntronMaxVsReadN", "100", "300", "500",
+        "--outSJfilterIntronMaxVsReadN", *_STAR_SJ_FILTER_INTRON_MAX_VS_READN,
         "--alignIntronMin", str(config.min_intron_len),
         *max_intron_args,
         "--outFileNamePrefix", "STAR_",
         "--outSAMattributes", "All",
         "--outSAMattrIHstart", "0",
         "--outSAMstrandField", "intronMotif",
-        "--limitBAMsortRAM", "27643756136",
+        "--limitBAMsortRAM", _STAR_BAM_SORT_RAM,
         *zcat_args,
         *quality_args,
     ]
