@@ -14,6 +14,7 @@ from eukan.cli._framework import (
     drop_none,
     genome_option,
     numcpu_option,
+    resolve_optional_path,
 )
 
 
@@ -129,10 +130,10 @@ def annotate(
         allow_noncanonical_splice=splice_permissive,
         spaln_ssp=spsp,
         kingdom=kingdom or None,
-        transcripts_fasta=transcripts_fasta.resolve() if transcripts_fasta else None,
-        transcripts_gff=transcripts_gff.resolve() if transcripts_gff else None,
-        rnaseq_hints=rnaseq_hints.resolve() if rnaseq_hints else None,
-        utrs_db=utrs.resolve() if utrs else None,
+        transcripts_fasta=resolve_optional_path(transcripts_fasta),
+        transcripts_gff=resolve_optional_path(transcripts_gff),
+        rnaseq_hints=resolve_optional_path(rnaseq_hints),
+        utrs_db=resolve_optional_path(utrs),
     ))
 
     force_steps = force_steps_from_run_flags(

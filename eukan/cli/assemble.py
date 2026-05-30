@@ -14,6 +14,7 @@ from eukan.cli._framework import (
     force_option,
     genome_option,
     numcpu_option,
+    resolve_optional_path,
 )
 
 
@@ -130,9 +131,9 @@ def assemble(
         splice_permissive=splice_permissive,
         diagnose_softclips=diagnose_softclips,
         genetic_code=code,
-        left_reads=left.resolve() if left else None,
-        right_reads=right.resolve() if right else None,
-        single_reads=single.resolve() if single else None,
+        left_reads=resolve_optional_path(left),
+        right_reads=resolve_optional_path(right),
+        single_reads=resolve_optional_path(single),
         strand_specific=strand_specific,
         memory_gb=memory_gb,
     ))

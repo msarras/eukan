@@ -12,7 +12,7 @@ import re
 import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 from eukan.exceptions import ConfigurationError
@@ -21,6 +21,7 @@ from eukan.infra.manifest import (
     RunManifest,
     StepRecord,
     StepStatus,
+    _now,
     save_manifest,
 )
 from eukan.infra.utils import md5_file
@@ -52,6 +53,14 @@ def step_dir(work_dir: Path, step_name: str) -> Path:
     d = work_dir / step_name
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def _resolve_step_dir(work_dir: Path, step_name: str, step_dir: Path | None) -> Path:
+    """Resolve a step's directory: the explicit override, else ``work_dir/step_name``.
+
+    Does not create the directory — callers mkdir where needed.
+    """
+    return step_dir if step_dir else work_dir / step_name
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +98,7 @@ def pipeline_step(
     record.error = None
     manifest.steps[step_name] = record
 
-    sdir = step_dir if step_dir else work_dir / step_name
+    sdir = _resolve_step_dir(work_dir, step_name, step_dir)
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / SENTINEL).write_text(f"started: {record.started_at}\n")
     save_manifest(work_dir, manifest)
@@ -147,13 +156,13 @@ def is_step_complete(manifest: RunManifest, step_name: str) -> Path | None:
 
 def is_step_interrupted(work_dir: Path, step_name: str, step_dir: Path | None = None) -> bool:
     """Check if a step was interrupted (sentinel exists)."""
-    sdir = step_dir if step_dir else work_dir / step_name
+    sdir = _resolve_step_dir(work_dir, step_name, step_dir)
     return (sdir / SENTINEL).exists()
 
 
 def clean_interrupted_step(work_dir: Path, step_name: str, step_dir: Path | None = None) -> None:
     """Remove partial output from an interrupted step."""
-    sdir = step_dir if step_dir else work_dir / step_name
+    sdir = _resolve_step_dir(work_dir, step_name, step_dir)
     if sdir.exists():
         shutil.rmtree(sdir)
 
@@ -234,12 +243,8 @@ def validate_step_outputs(
 
 
 # ---------------------------------------------------------------------------
-# Time helpers (shared with manifest)
+# Duration helper (``_now`` is imported from manifest — single source of truth)
 # ---------------------------------------------------------------------------
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _compute_duration(record: StepRecord) -> None:

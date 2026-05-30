@@ -241,6 +241,15 @@ def drop_none(**kwargs) -> dict:
     return {k: v for k, v in kwargs.items() if v is not None}
 
 
+def resolve_optional_path(path: Path | None) -> Path | None:
+    """Resolve an optional CLI path to an absolute path, preserving ``None``.
+
+    Centralizes the ``x.resolve() if x else None`` idiom repeated when
+    plumbing optional path arguments into configs.
+    """
+    return path.resolve() if path else None
+
+
 def numcpu_option(func):
     return optgroup.option(
         "--numcpu", "-n", type=int, default=multiprocessing.cpu_count(),

@@ -25,12 +25,17 @@ from eukan.infra.tools_registry import Tool, load_tools
 # corrupted binary, missing kernel feature). See _crash_signal().
 _FATAL_SIGNALS = {"SIGILL", "SIGSEGV", "SIGBUS", "SIGABRT", "SIGFPE"}
 
-# Substrings that bash/zsh emit when a child of a wrapper script is killed
-# by a fatal signal. The wrapper's own exit code is 128+N (signal-encoded),
-# but its stderr also carries these human-readable strings. Treat them as
-# broken so wrappers like /bin/STAR (which pick a SIMD variant and exec it)
-# get caught even when the wrapper itself exits with the encoded code.
-_SHELL_CRASH_STRINGS = ("Illegal instruction", "Segmentation fault", "Bus error")
+# Substrings that bash/zsh emit when a child of a wrapper script is killed by
+# a fatal signal, mapped to the signal name. The wrapper's own exit code is
+# 128+N (signal-encoded, handled by _crash_signal), but its stderr also carries
+# these human-readable strings — so wrappers like /bin/STAR (which pick a SIMD
+# variant and exec it) get caught even when the wrapper exits with the encoded
+# code.
+_CRASH_STRING_TO_SIGNAL = {
+    "Illegal instruction": "SIGILL",
+    "Segmentation fault": "SIGSEGV",
+    "Bus error": "SIGBUS",
+}
 
 
 def _crash_signal(returncode: int) -> str | None:
@@ -105,13 +110,9 @@ def check_tool(tool: Tool) -> CheckResult:
         # nested call).
         crash_sig = _crash_signal(result.returncode)
         if crash_sig is None:
-            for s in _SHELL_CRASH_STRINGS:
-                if s in output:
-                    crash_sig = {
-                        "Illegal instruction": "SIGILL",
-                        "Segmentation fault": "SIGSEGV",
-                        "Bus error": "SIGBUS",
-                    }[s]
+            for crash_str, sig_name in _CRASH_STRING_TO_SIGNAL.items():
+                if crash_str in output:
+                    crash_sig = sig_name
                     break
 
         # Many bioinformatics tools exit non-zero on --help or with no args

@@ -15,7 +15,7 @@ import gffutils
 from eukan.gff import create_gff_db
 from eukan.gff._compat import empty_db
 from eukan.gff.intervals import IntervalIndex
-from eukan.gff.io import featuredb2gff3_file
+from eukan.gff.io import count_gff3_features, featuredb2gff3_file
 from eukan.infra.logging import get_logger
 
 log = get_logger(__name__)
@@ -31,19 +31,6 @@ WEAK_CONCORDANCE_THRESHOLD = 250
 # the tool that produced them. ``prot.gff3`` is the spaln output but its
 # filename is fixed by EVM's evidence table, so we relabel here for logs.
 _SOURCE_LABEL = {"prot": "spaln"}
-
-
-def _count_genes_in_gff(path: str | Path) -> int:
-    """Count ``gene`` features in a GFF3 by line scan (no db build)."""
-    n = 0
-    with open(path) as fh:
-        for line in fh:
-            if not line or line.startswith("#"):
-                continue
-            cols = line.split("\t")
-            if len(cols) >= 3 and cols[2] == "gene":
-                n += 1
-    return n
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +343,7 @@ def extract_supported_models(
     paths = list(gff3_paths)
 
     source_counts = [
-        (_SOURCE_LABEL.get(Path(p).stem, Path(p).stem), _count_genes_in_gff(p))
+        (_SOURCE_LABEL.get(Path(p).stem, Path(p).stem), count_gff3_features(p))
         for p in paths
     ]
     log.info(

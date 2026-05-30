@@ -36,6 +36,11 @@ class HitInfo(TypedDict, total=False):
     ec_numbers: list[str]  # EC codes parsed out of the KO definition
 
 
+# E-value at or below which an hmmscan/phmmer hit is treated as a confident
+# ("good") functional assignment; above it the hit is marginal (e.g. product
+# falls back to "hypothetical protein").
+_EVALUE_GOOD_HIT = 1e-2
+
 _PFAM_VERSION_RE = re.compile(r"\.\d+$")
 
 
@@ -247,9 +252,9 @@ def annotate_gff3(
     Returns path to the annotated output file.
     """
     hmmscan_strict = {
-        qid: {hid: info for hid, info in hits.items() if info["evalue"] <= 1e-2}
+        qid: {hid: info for hid, info in hits.items() if info["evalue"] <= _EVALUE_GOOD_HIT}
         for qid, hits in hmmscan_res.items()
-        if any(info["evalue"] <= 1e-2 for info in hits.values())
+        if any(info["evalue"] <= _EVALUE_GOOD_HIT for info in hits.values())
     }
 
     from eukan.gff import create_gff_db
@@ -269,13 +274,13 @@ def annotate_gff3(
 def _apply_uniprot_hits(f: gffutils.Feature, hits: dict[str, HitInfo]) -> None:
     """Set product/inference from UniProt phmmer hits (E-value gated)."""
     f.attributes["product"] = [
-        v["description"] if v["evalue"] <= 1e-2 else "hypothetical protein"
+        v["description"] if v["evalue"] <= _EVALUE_GOOD_HIT else "hypothetical protein"
         for v in hits.values()
     ]
     f.attributes["inference"] = [
         f"similar to AA sequence:UniProtKB:{k}"
         for k, v in hits.items()
-        if v["evalue"] <= 1e-2
+        if v["evalue"] <= _EVALUE_GOOD_HIT
     ]
 
 

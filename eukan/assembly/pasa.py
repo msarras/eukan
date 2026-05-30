@@ -8,6 +8,7 @@ from pathlib import Path
 from eukan.infra.artifacts import Artifact
 from eukan.infra.logging import get_logger
 from eukan.infra.runner import run_cmd
+from eukan.infra.utils import concat_files
 from eukan.settings import AssemblyConfig
 
 log = get_logger(__name__)
@@ -57,11 +58,10 @@ def run_pasa(config: AssemblyConfig) -> None:
 
     # Concatenate assemblies
     comprehensive = wd / "trinity-comprehensive.fasta"
-    with open(comprehensive, "w") as out:
-        for fa in ["trinity-denovo.fasta", "trinity-gg.fasta"]:
-            path = wd / fa
-            if path.exists():
-                out.write(path.read_text())
+    concat_files(
+        [wd / fa for fa in ["trinity-denovo.fasta", "trinity-gg.fasta"] if (wd / fa).exists()],
+        comprehensive,
+    )
 
     # Clean sequences
     run_cmd(
@@ -198,8 +198,11 @@ def _build_transcript_hints(wd: Path) -> None:
             hints_out.write("\t".join(hint_cols) + "\n")
 
     # Merge all hints
-    with open(wd / Artifact.RNASEQ_HINTS, "w") as out:
-        for hf in ["hints_transcripts.gff", "hints_introns.gff", "hints_coverage.gff"]:
-            path = wd / hf
-            if path.exists():
-                out.write(path.read_text())
+    concat_files(
+        [
+            wd / hf
+            for hf in ["hints_transcripts.gff", "hints_introns.gff", "hints_coverage.gff"]
+            if (wd / hf).exists()
+        ],
+        wd / Artifact.RNASEQ_HINTS,
+    )

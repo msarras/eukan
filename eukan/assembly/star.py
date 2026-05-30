@@ -12,6 +12,7 @@ from eukan.exceptions import ExternalToolError
 from eukan.infra.artifacts import Artifact
 from eukan.infra.logging import get_logger
 from eukan.infra.runner import run_cmd
+from eukan.infra.utils import concat_files
 from eukan.settings import AssemblyConfig
 
 log = get_logger(__name__)
@@ -304,11 +305,10 @@ def _generate_hints_from_star(
             _run_wig2hints(wd, wig_file, strand, hints_file)
 
         # Merge coverage hints
-        with open(wd / "hints_coverage.gff", "w") as out:
-            for hf in ["hints.ep.minus.gff", "hints.ep.plus.gff"]:
-                path = wd / hf
-                if path.exists():
-                    out.write(path.read_text())
+        concat_files(
+            [wd / hf for hf in ["hints.ep.minus.gff", "hints.ep.plus.gff"] if (wd / hf).exists()],
+            wd / "hints_coverage.gff",
+        )
 
         # Cleanup intermediate files
         for f in ["STAR_reverse.bam", "STAR_forward.bam", "minus.wig", "plus.wig",
