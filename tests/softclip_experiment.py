@@ -52,12 +52,6 @@ from eukan.assembly.bam_diagnostic import (
     diagnose_bam,
     to_summary_dict,
 )
-from eukan.assembly.junction_rescue import (
-    JunctionRescueResult,
-    histogram_margins,
-    write_junctions_sj_tab,
-    write_junctions_tsv,
-)
 
 BASE = Path(__file__).resolve().parent.parent
 DATA = BASE / "tests" / "data"
@@ -107,34 +101,6 @@ def _print_summary(label: str, soft: SoftClipStats, intron: IntronStats) -> None
         click.echo("  top dinucleotides:")
         for dinuc, n in list(intron.by_dinucleotide.items())[:8]:
             click.echo(f"    {dinuc:<6}  {n:>12,}  ({_pct(n, intron.n_introns_total)})")
-
-
-def _print_rescue_summary(jr: JunctionRescueResult) -> None:
-    """Print rescue counts + top-5 records + margin histogram."""
-    click.echo("\n  Junction rescue:")
-    click.echo(f"    Allowlist:           {','.join(jr.dinuc_allowlist)}")
-    click.echo(f"    Loci attempted:      {jr.n_loci_attempted:>10,}")
-    click.echo(
-        f"    Loci rescued:        {jr.n_loci_rescued:>10,} "
-        f"({jr.rescue_rate_pct:.2f}% of attempted)"
-    )
-    click.echo(f"    Unique junctions:    {jr.n_junctions_unique:>10,}")
-    click.echo(f"    Novel vs STAR SJ:    {jr.n_junctions_novel_vs_star:>10,}")
-    click.echo(f"    Cleared SJ filters:  {jr.n_junctions_emitted_sj:>10,}")
-    if jr.records:
-        margin_hist = histogram_margins(jr.records)
-        margin_str = " ".join(
-            f"m={m}:{margin_hist.get(m, 0)}" for m in range(6)
-        )
-        click.echo(f"    Margin histogram:    {margin_str}")
-        click.echo("\n  top-10 rescued junctions (chrom:start-end strand | n_reads | dinuc | match | margin | known_in_STAR):")
-        for r in jr.records[:10]:
-            known = "yes" if r.was_in_star_sj else "no"
-            click.echo(
-                f"    {r.chrom}:{r.intron_start + 1}-{r.intron_end} {r.strand}  "
-                f"{r.n_reads:>6}  {r.donor}-{r.acceptor}  "
-                f"match={r.max_outward_match:>3}  m={r.margin}  STAR:{known}"
-            )
 
 
 def _print_verdict(verdict: Verdict) -> None:
@@ -211,7 +177,6 @@ def _print_locus_consistency(lc: LocusConsistencyStats) -> None:
 
 def _write_outputs(
     out_dir: Path, report: DiagnosticReport, verdict: Verdict,
-    *, emit_sj_tab: bool = False, sj_min_reads: int = 3,
 ) -> None:
     json_path = out_dir / "softclip_diagnostic.json"
     with open(json_path, "w") as f:
@@ -244,36 +209,12 @@ def _write_outputs(
             )
     click.echo(f"  wrote {loci_path} ({len(sorted_rows):,} non-singleton loci)")
 
-    if report.junctions is not None:
-        rescue_tsv = out_dir / "rescued_junctions.tsv"
-        write_junctions_tsv(report.junctions.records, rescue_tsv)
-        click.echo(
-            f"  wrote {rescue_tsv} ({len(report.junctions.records):,} junctions)"
-        )
-        if emit_sj_tab:
-            sj_path = out_dir / "rescued_junctions.sj.tab"
-            n_written = write_junctions_sj_tab(
-                report.junctions.records, sj_path,
-                min_reads=sj_min_reads,
-                dinuc_allowlist=report.junctions.dinuc_allowlist,
-            )
-            click.echo(
-                f"  wrote {sj_path} ({n_written:,} junctions; "
-                f"min_reads={sj_min_reads})"
-            )
-
 
 def _run_one(label: str, bam: Path, genome: Path, *, min_clip_len: int,
              cluster_key_len: int, min_mapq: int,
              hamming_tolerance: int, cluster_hamming_tolerance: int,
              min_consistency_fraction: float,
-             consensus_min_majority_fraction: float,
-             rescue_junctions: bool = False,
-             rescue_max_intron_len: int = 10000,
-             rescue_min_intron_len: int = 20,
-             rescue_min_locus_depth: int = 5,
-             rescue_min_read_votes: int = 3,
-             emit_sj_tab: bool = False) -> None:
+             consensus_min_majority_fraction: float) -> None:
     click.echo(f"\nDiagnosing {label}…")
     click.echo(f"  bam:    {bam}")
     click.echo(f"  genome: {genome}")
@@ -283,20 +224,10 @@ def _run_one(label: str, bam: Path, genome: Path, *, min_clip_len: int,
         f"min-consistency-fraction={min_consistency_fraction}, "
         f"consensus-majority={consensus_min_majority_fraction}"
     )
-    if rescue_junctions:
-        click.echo(
-            f"  junction rescue: ON (intron=[{rescue_min_intron_len}, "
-            f"{rescue_max_intron_len}], min-locus-depth={rescue_min_locus_depth})"
-        )
     if not bam.exists():
         raise click.ClickException(f"BAM not found: {bam}")
     if not genome.exists():
         raise click.ClickException(f"Genome not found: {genome}")
-
-    # Default the STAR SJ path to a STAR_SJ.out.tab beside the BAM, so the
-    # was_in_star_sj field gets populated when the diagnostic is run on
-    # an actual STAR output dir.
-    sj_path = bam.parent / "STAR_SJ.out.tab"
 
     t0 = time.time()
     report = diagnose_bam(
@@ -308,11 +239,6 @@ def _run_one(label: str, bam: Path, genome: Path, *, min_clip_len: int,
         cluster_hamming_tolerance=cluster_hamming_tolerance,
         min_consistency_fraction=min_consistency_fraction,
         consensus_min_majority_fraction=consensus_min_majority_fraction,
-        rescue_junctions=rescue_junctions,
-        rescue_min_intron_len=rescue_min_intron_len,
-        rescue_max_intron_len=rescue_max_intron_len,
-        rescue_min_locus_depth=rescue_min_locus_depth,
-        rescue_star_sj_path=sj_path if sj_path.exists() else None,
     )
     click.echo(f"  scan complete in {time.time() - t0:.1f}s")
 
@@ -321,46 +247,12 @@ def _run_one(label: str, bam: Path, genome: Path, *, min_clip_len: int,
     _print_locus_consistency(report.locus_consistency)
     verdict = compute_verdict(report)
     _print_verdict(verdict)
-    if report.junctions is not None:
-        _print_rescue_summary(report.junctions)
-    _write_outputs(
-        bam.parent, report, verdict,
-        emit_sj_tab=emit_sj_tab, sj_min_reads=rescue_min_read_votes,
-    )
+    _write_outputs(bam.parent, report, verdict)
 
 
 @click.group()
 def cli() -> None:
     """Soft-clip + intron diagnostic experiments."""
-
-
-def _rescue_options(f):
-    """Shared rescue flags for cmd_one / cmd_run_all."""
-    f = click.option(
-        "--rescue-junctions/--no-rescue-junctions", default=False, show_default=True,
-        help="Attempt to rescue non-canonical splice junctions from soft-clipped reads.",
-    )(f)
-    f = click.option(
-        "--rescue-max-intron-len", default=10000, show_default=True, type=int,
-        help="Largest intron the rescue search will consider.",
-    )(f)
-    f = click.option(
-        "--rescue-min-intron-len", default=20, show_default=True, type=int,
-        help="Smallest intron the rescue will accept.",
-    )(f)
-    f = click.option(
-        "--rescue-min-locus-depth", default=5, show_default=True, type=int,
-        help="Min n_clips at a BAM-orient locus before attempting rescue.",
-    )(f)
-    f = click.option(
-        "--rescue-min-read-votes", default=3, show_default=True, type=int,
-        help="Min n_reads supporting a junction for SJ.tab emission.",
-    )(f)
-    f = click.option(
-        "--emit-sj-tab/--no-emit-sj-tab", default=False, show_default=True,
-        help="Also emit a 4-col STAR --sjdbFileChrStartEnd-format file.",
-    )(f)
-    return f
 
 
 @cli.command("one")
@@ -378,19 +270,12 @@ def _rescue_options(f):
               help="Fraction of tracked long-clip reads at a locus that must be within --hamming-tolerance of the dominant key for the locus to be marked consistent.")
 @click.option("--consensus-min-majority-fraction", default=0.6, show_default=True, type=float,
               help="Per-column majority-vote threshold for the cluster consensus. Lower extends the consensus into noisier columns; higher terminates sooner.")
-@_rescue_options
 def cmd_one(
     bam: Path, genome: Path, label: str,
     min_clip_len: int, cluster_key_len: int, min_mapq: int,
     hamming_tolerance: int, cluster_hamming_tolerance: int,
     min_consistency_fraction: float,
     consensus_min_majority_fraction: float,
-    rescue_junctions: bool,
-    rescue_max_intron_len: int,
-    rescue_min_intron_len: int,
-    rescue_min_locus_depth: int,
-    rescue_min_read_votes: int,
-    emit_sj_tab: bool,
 ) -> None:
     """Run the diagnostic against one BAM + genome pair."""
     _run_one(
@@ -402,12 +287,6 @@ def cmd_one(
         cluster_hamming_tolerance=cluster_hamming_tolerance,
         min_consistency_fraction=min_consistency_fraction,
         consensus_min_majority_fraction=consensus_min_majority_fraction,
-        rescue_junctions=rescue_junctions,
-        rescue_max_intron_len=rescue_max_intron_len,
-        rescue_min_intron_len=rescue_min_intron_len,
-        rescue_min_locus_depth=rescue_min_locus_depth,
-        rescue_min_read_votes=rescue_min_read_votes,
-        emit_sj_tab=emit_sj_tab,
     )
 
 
@@ -419,18 +298,11 @@ def cmd_one(
 @click.option("--cluster-hamming-tolerance", default=1, show_default=True, type=int)
 @click.option("--min-consistency-fraction", default=0.95, show_default=True, type=float)
 @click.option("--consensus-min-majority-fraction", default=0.6, show_default=True, type=float)
-@_rescue_options
 def cmd_run_all(
     min_clip_len: int, cluster_key_len: int, min_mapq: int,
     hamming_tolerance: int, cluster_hamming_tolerance: int,
     min_consistency_fraction: float,
     consensus_min_majority_fraction: float,
-    rescue_junctions: bool,
-    rescue_max_intron_len: int,
-    rescue_min_intron_len: int,
-    rescue_min_locus_depth: int,
-    rescue_min_read_votes: int,
-    emit_sj_tab: bool,
 ) -> None:
     """Diagnose both hemistasia and flectonema using the known data paths."""
     for label, (bam, genome) in KNOWN.items():
@@ -443,12 +315,6 @@ def cmd_run_all(
             cluster_hamming_tolerance=cluster_hamming_tolerance,
             min_consistency_fraction=min_consistency_fraction,
             consensus_min_majority_fraction=consensus_min_majority_fraction,
-            rescue_junctions=rescue_junctions,
-            rescue_max_intron_len=rescue_max_intron_len,
-            rescue_min_intron_len=rescue_min_intron_len,
-            rescue_min_locus_depth=rescue_min_locus_depth,
-            rescue_min_read_votes=rescue_min_read_votes,
-            emit_sj_tab=emit_sj_tab,
         )
 
 

@@ -26,8 +26,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import pysam
 
-    from eukan.assembly.junction_rescue import JunctionRescueResult
-
 
 _CIGAR_M = 0
 _CIGAR_D = 2
@@ -233,36 +231,6 @@ class LocusData:
     short_keys: set[str] = field(default_factory=set)
 
 
-# Per-BAM-orient-locus reservoir cap. Bounded so deep loci can't blow up
-# memory; 50 is enough to build a stable per-column majority consensus.
-RESCUE_SAMPLE_CAP = 50
-
-# Bases of the aligned block adjacent to the soft-clip we retain per
-# sample, to detect STAR over-extension into the intron.
-RESCUE_ANCHOR_ADJACENT_LEN = 5
-
-
-@dataclass
-class BamLocusData:
-    """Per-(chrom, anchor_pos_bam, bam_side) state for the rescue path.
-
-    Populated only when ``diagnose_bam(rescue_junctions=True)``. Kept
-    separate from ``LocusData`` so the existing diagnostic pays no
-    memory cost when rescue is off.
-
-    Sample lists are capped at ``RESCUE_SAMPLE_CAP`` (50). To keep the
-    peak memory footprint manageable on large BAMs with millions of
-    singleton loci, samples are only retained starting from the *second*
-    clip at each locus — singletons accumulate ``n_clips=1`` but no
-    sample storage. The rescue's ``min_locus_depth >= 2`` requirement
-    means singletons would be skipped anyway.
-    """
-
-    n_clips: int = 0
-    clip_samples: list[str] = field(default_factory=list)
-    anchor_adjacent_samples: list[str] = field(default_factory=list)
-
-
 @dataclass
 class LocusRow:
     """One emitted row of per-locus data (non-singleton loci only)."""
@@ -302,12 +270,11 @@ class LocusConsistencyStats:
 
 @dataclass
 class DiagnosticReport:
-    """All three views of one BAM walk, plus optional rescue results."""
+    """All three views of one BAM walk."""
 
     softclip: SoftClipStats
     intron: IntronStats
     locus_consistency: LocusConsistencyStats
-    junctions: JunctionRescueResult | None = None
 
 
 @dataclass
@@ -387,53 +354,6 @@ def _extract_clips(
             yield "5p", _reverse_complement(clip_seq), anchor_pos
         else:
             yield "3p", clip_seq, anchor_pos
-
-
-def _extract_clips_bamorient(
-    read: pysam.AlignedSegment, min_clip_len: int,
-    *, n_adjacent: int = RESCUE_ANCHOR_ADJACENT_LEN,
-) -> Iterable[tuple[str, str, int, str]]:
-    """Yield ``(bam_side, bam_seq, anchor_pos, anchor_adjacent)`` per soft-clip.
-
-    Unlike :func:`_extract_clips`, this stays in BAM/reference orientation
-    — no reverse-complementation, no side-label flip for reverse-mapped
-    reads. The rescue search is a genome-coordinate operation, not an
-    mRNA-orientation operation, so it's cleanest to keep BAM orientation.
-
-    - ``bam_side``: ``"left"`` (leading clip; cigar[0] is SOFT_CLIP) or
-      ``"right"`` (trailing clip; cigar[-1] is SOFT_CLIP).
-    - ``bam_seq``: the clip sequence as it appears in ``query_sequence``.
-    - ``anchor_pos``: the 0-based half-open boundary between alignment
-      and clip on the genome.
-        - ``bam_left``: ``read.reference_start`` (intron ends just before).
-        - ``bam_right``: ``read.reference_end`` (intron starts at this pos).
-    - ``anchor_adjacent``: the ``n_adjacent`` bases of the aligned block
-      immediately adjacent to the clip on the read (BAM order):
-        - ``bam_left``: first ``n_adjacent`` bases of the alignment.
-        - ``bam_right``: last ``n_adjacent`` bases of the alignment.
-      Used downstream to detect STAR over-extension into the intron.
-    """
-    cigar = read.cigartuples
-    seq = read.query_sequence
-    ref_end = read.reference_end
-    if cigar is None or seq is None or ref_end is None:
-        return
-
-    op0, len0 = cigar[0]
-    if op0 == _CIGAR_SOFT_CLIP and len0 >= min_clip_len:
-        bam_seq = seq[:len0]
-        anchor_pos = read.reference_start
-        anchor_adjacent = seq[len0 : len0 + n_adjacent]
-        yield "left", bam_seq, anchor_pos, anchor_adjacent
-
-    op_last, len_last = cigar[-1]
-    if op_last == _CIGAR_SOFT_CLIP and len_last >= min_clip_len:
-        bam_seq = seq[-len_last:]
-        anchor_pos = ref_end
-        alignment_end_in_query = len(seq) - len_last
-        start = max(0, alignment_end_in_query - n_adjacent)
-        anchor_adjacent = seq[start:alignment_end_in_query]
-        yield "right", bam_seq, anchor_pos, anchor_adjacent
 
 
 def _cluster_key(side: str, seq: str, k: int) -> str:
@@ -576,13 +496,6 @@ def diagnose_bam(
     cluster_hamming_tolerance: int = 1,
     min_consistency_fraction: float = 0.95,
     consensus_min_majority_fraction: float = 0.6,
-    rescue_junctions: bool = False,
-    rescue_min_intron_len: int = 20,
-    rescue_max_intron_len: int = 10000,
-    rescue_min_locus_depth: int = 5,
-    rescue_min_seed_extension: int = 4,
-    rescue_dinuc_allowlist: list[str] | None = None,
-    rescue_star_sj_path: Path | None = None,
 ) -> DiagnosticReport:
     """Stream a BAM and return aggregated soft-clip + intron + locus stats.
 
@@ -610,14 +523,6 @@ def diagnose_bam(
     per-column majority vote is when building a cluster's consensus
     sequence. Lower values let the consensus extend further into noisier
     columns; higher values terminate sooner. Default 0.6.
-
-    When ``rescue_junctions=True`` the BAM walk also retains a bounded
-    reservoir of clip samples per (chrom, anchor_pos_bam, bam_side)
-    locus, and dispatches to
-    :func:`eukan.assembly.junction_rescue.rescue_junctions_from_diagnostic`
-    after the classification pass to identify candidate splice junctions
-    (see that module for the algorithm). The rescue is opt-in to keep
-    the default diagnostic memory footprint unchanged.
     """
     import pysam
 
@@ -630,7 +535,6 @@ def diagnose_bam(
     cluster_reads: Counter[str] = Counter()
     cluster_examples: dict[str, str] = {}
     locus_data: dict[tuple[str, int, str], LocusData] = {}
-    bam_locus_data: dict[tuple[str, int, str], BamLocusData] = {}
 
     dinuc: Counter[str] = Counter()
     n_introns = 0
@@ -644,14 +548,7 @@ def diagnose_bam(
                 chrom_name = read.reference_name
                 if chrom_name is None:
                     continue
-
-                mrna_clips = list(_extract_clips(read, min_clip_len))
-                bam_clips = (
-                    list(_extract_clips_bamorient(read, min_clip_len))
-                    if rescue_junctions else []
-                )
-
-                for idx, (side, seq, anchor_pos) in enumerate(mrna_clips):
+                for side, seq, anchor_pos in _extract_clips(read, min_clip_len):
                     had_clip = True
                     clips_by_side[side] += 1
                     locus = (chrom_name, anchor_pos, side)
@@ -670,20 +567,6 @@ def diagnose_bam(
                     else:
                         if len(ld.short_keys) < LOCUS_KEY_CAP:
                             ld.short_keys.add(seq.upper())
-
-                    if rescue_junctions and idx < len(bam_clips):
-                        bam_side, bam_seq, bam_anchor, anchor_adj = bam_clips[idx]
-                        bam_locus = (chrom_name, bam_anchor, bam_side)
-                        bld = bam_locus_data.setdefault(bam_locus, BamLocusData())
-                        bld.n_clips += 1
-                        # Skip sample storage for the first clip — the
-                        # bulk of loci are singletons we'd never rescue
-                        # anyway. From clip 2 onward, accumulate up to
-                        # RESCUE_SAMPLE_CAP samples.
-                        if bld.n_clips >= 2 and len(bld.clip_samples) < RESCUE_SAMPLE_CAP:
-                            bld.clip_samples.append(bam_seq.upper())
-                            bld.anchor_adjacent_samples.append(anchor_adj.upper())
-
                 if had_clip:
                     n_reads_with_clip += 1
 
@@ -794,29 +677,8 @@ def diagnose_bam(
         top_n=top_n,
     )
 
-    rescue_result = None
-    if rescue_junctions:
-        from eukan.assembly.junction_rescue import rescue_junctions_from_diagnostic
-
-        rescue_result = rescue_junctions_from_diagnostic(
-            bam_locus_data=bam_locus_data,
-            locus_consistency=locus_consistency,
-            top_clusters=top_clusters,
-            genome_path=genome_path,
-            cluster_key_len=cluster_key_len,
-            consensus_min_majority_fraction=consensus_min_majority_fraction,
-            min_intron_len=rescue_min_intron_len,
-            max_intron_len=rescue_max_intron_len,
-            min_locus_depth=rescue_min_locus_depth,
-            min_seed_extension=rescue_min_seed_extension,
-            dinuc_allowlist=rescue_dinuc_allowlist,
-            star_sj_path=rescue_star_sj_path,
-            by_dinucleotide=intron.by_dinucleotide,
-        )
-
     return DiagnosticReport(
         softclip=soft, intron=intron, locus_consistency=locus_consistency,
-        junctions=rescue_result,
     )
 
 
@@ -1003,7 +865,7 @@ def to_summary_dict(report: DiagnosticReport, verdict: Verdict) -> dict:
     soft = report.softclip
     intron = report.intron
     lc = report.locus_consistency
-    summary: dict = {
+    return {
         "softclip": {
             "n_reads_scanned": soft.n_reads_scanned,
             "n_reads_with_clip": soft.n_reads_with_clip,
@@ -1064,15 +926,3 @@ def to_summary_dict(report: DiagnosticReport, verdict: Verdict) -> dict:
             },
         },
     }
-    if report.junctions is not None:
-        jr = report.junctions
-        summary["junction_rescue"] = {
-            "n_loci_attempted": jr.n_loci_attempted,
-            "n_loci_rescued": jr.n_loci_rescued,
-            "n_junctions_unique": jr.n_junctions_unique,
-            "n_junctions_novel_vs_star": jr.n_junctions_novel_vs_star,
-            "n_junctions_emitted_sj": jr.n_junctions_emitted_sj,
-            "rescue_rate_pct": jr.rescue_rate_pct,
-            "dinuc_allowlist": jr.dinuc_allowlist,
-        }
-    return summary
