@@ -17,6 +17,7 @@ import pysam
 import pytest
 
 from eukan.assembly.bam_diagnostic import (
+    BamLocusData,
     DiagnosticReport,
     IntronStats,
     LocusConsistencyStats,
@@ -25,12 +26,20 @@ from eukan.assembly.bam_diagnostic import (
     _cluster_key,
     _dinucleotide,
     _extract_clips,
+    _extract_clips_bamorient,
     _hamming_distance,
     _is_low_complexity,
     _reverse_complement,
     _walk_introns,
     compute_verdict,
     diagnose_bam,
+)
+from eukan.assembly.junction_rescue import (
+    JunctionCandidate,
+    JunctionRecord,
+    aggregate_junctions,
+    rescue_junctions_from_diagnostic,
+    write_junctions_sj_tab,
 )
 from eukan.infra.genome import ContigIndex
 
@@ -940,3 +949,404 @@ def test_split_tolerance_per_locus_tolerant_cross_locus_strict(
     assert soft.n_clusters == 3
     assert soft.cluster_to_loci["TTTTGGGGGGGG"] == 1
     assert soft.cluster_to_loci["TTTTGGGGGGGT"] == 2  # locus A's H=1 variant + locus B
+
+
+# ------------------------------------------------------------------
+# BAM-orientation soft-clip extraction (for the rescue path)
+# ------------------------------------------------------------------
+
+
+def test_extract_clips_bamorient_forward_leading(clip_bam):
+    r = _read_single(clip_bam, "fwd_lead")
+    clips = list(_extract_clips_bamorient(r, min_clip_len=8))
+    assert len(clips) == 1
+    bam_side, bam_seq, anchor_pos, anchor_adj = clips[0]
+    assert bam_side == "left"
+    # Forward read: BAM orient seq is unchanged from query_sequence[:len0].
+    assert bam_seq == "AAAACCCCAAAAGGGGGGGG"
+    # anchor_pos = read.reference_start = 50
+    assert anchor_pos == 50
+    # anchor_adjacent = first 5 bp of the aligned block on the read
+    assert anchor_adj == "TTTTT"
+
+
+def test_extract_clips_bamorient_forward_trailing(clip_bam):
+    r = _read_single(clip_bam, "fwd_trail")
+    clips = list(_extract_clips_bamorient(r, min_clip_len=8))
+    assert len(clips) == 1
+    bam_side, bam_seq, anchor_pos, anchor_adj = clips[0]
+    assert bam_side == "right"
+    # Forward read: BAM orient seq is unchanged.
+    assert bam_seq == "AAAACCCCAAAAGGGGGGGG"
+    # anchor_pos = read.reference_end = ref_start + alignment_len = 100 + 10 = 110
+    assert anchor_pos == 110
+    # anchor_adjacent = last 5 bp of the aligned block on the read
+    assert anchor_adj == "TTTTT"
+
+
+def test_extract_clips_bamorient_reverse_leading_no_rc(clip_bam):
+    """Reverse reads keep BAM orientation in this helper (unlike _extract_clips)."""
+    r = _read_single(clip_bam, "rev_lead")
+    clips = list(_extract_clips_bamorient(r, min_clip_len=8))
+    assert len(clips) == 1
+    bam_side, bam_seq, anchor_pos, anchor_adj = clips[0]
+    assert bam_side == "left"
+    # NO RC — seq comes straight from query_sequence[:len0]
+    assert bam_seq == "AAAACCCCAAAAGGGGGGGG"
+    assert anchor_pos == 150
+
+
+# ------------------------------------------------------------------
+# Soft-clip-driven splice junction rescue
+# ------------------------------------------------------------------
+
+
+# Two unique 50-bp blocks for the exon prefixes used by the rescue
+# tests. No 20-mer substring of EXON1_PREFIX appears in EXON2_PREFIX
+# (or vice versa), so the rescue's seed search lands at exactly one
+# expected position per test. Both blocks are AT-rich and free of
+# spurious GT/AG dinucleotides at the splice-junction-relevant offsets.
+EXON1_PREFIX = "AGCATGCATGAACTGCATCAGTAACGTGCAACGAAGCATAACGGATCACA"
+EXON2_PREFIX = "ATCATCAGCAGTCAACTGTCAGATCCAGTGCATGGGATCACGTAGCATGC"
+assert len(EXON1_PREFIX) == 50
+assert len(EXON2_PREFIX) == 50
+
+
+def _build_genome_with_intron(
+    intron_start: int, intron_end: int, total_len: int,
+    *, donor: str = "GT", acceptor: str = "AG",
+    intron_filler_base: str = "C",
+) -> str:
+    """Synthetic genome with one canonical intron and unique exon prefixes.
+
+    Exon 1 occupies [0, intron_start) with EXON1_PREFIX at its tail.
+    Intron = [intron_start, intron_end) with explicit donor/acceptor
+    dinucleotides at the boundaries. Exon 2 occupies [intron_end,
+    total_len) with EXON2_PREFIX at its head.
+
+    The unique exon prefixes prevent the rescue's seed search from
+    finding a spurious tile-repeat match elsewhere in the genome —
+    important because the synthetic reads' clips and aligned-block
+    tails are drawn from the unique-prefix regions adjacent to the
+    intron boundaries.
+    """
+    assert intron_start >= 0 and intron_end > intron_start and intron_end <= total_len
+    intron_len = intron_end - intron_start
+    intron_mid_len = intron_len - 4
+    assert intron_mid_len >= 0
+    # Place EXON1_PREFIX so that its last bp lands at position intron_start - 1.
+    e1_filler_len = intron_start - len(EXON1_PREFIX)
+    assert e1_filler_len >= 0, "intron_start too small to fit EXON1_PREFIX"
+    exon1 = "A" * e1_filler_len + EXON1_PREFIX
+    # Place EXON2_PREFIX at the start of exon 2.
+    e2_total = total_len - intron_end
+    e2_filler_len = e2_total - len(EXON2_PREFIX)
+    assert e2_filler_len >= 0, "exon 2 too small to fit EXON2_PREFIX"
+    exon2 = EXON2_PREFIX + "T" * e2_filler_len
+    intron_mid = intron_filler_base * intron_mid_len
+    seq = exon1 + donor + intron_mid + acceptor + exon2
+    assert len(seq) == total_len
+    assert seq[intron_start : intron_start + 2] == donor
+    assert seq[intron_end - 2 : intron_end] == acceptor
+    return seq
+
+
+def _build_right_clip_reads(
+    n: int, genome_seq: str, *,
+    alignment_start: int, alignment_end: int, exon2_start: int,
+    clip_len: int = 30, anchor_adjacent_len: int = 5,
+) -> list[dict]:
+    """N forward reads aligned to exon1, soft-clipping the exon2 prefix.
+
+    Default clip_len=30 leaves 10 bp of extension past the rescue's
+    20-bp seed, plenty of slack for the seed-extension filter.
+    """
+    aligned = genome_seq[alignment_start:alignment_end]
+    clip = genome_seq[exon2_start : exon2_start + clip_len]
+    return [
+        dict(
+            query_name=f"r{i}",
+            query_sequence=aligned + clip,
+            flag=0,
+            reference_id=0,
+            reference_start=alignment_start,
+            mapping_quality=60,
+            cigartuples=[(0, len(aligned)), (4, len(clip))],
+        )
+        for i in range(n)
+    ]
+
+
+def test_rescue_finds_canonical_junction(tmp_path):
+    """10 right-clipped reads at one locus → one rescued junction with GT-AG."""
+    genome_seq = _build_genome_with_intron(
+        intron_start=90, intron_end=200, total_len=500,
+    )
+    fa = _write_fasta(tmp_path / "g.fa", [("chr1", genome_seq)])
+    reads = _build_right_clip_reads(
+        10, genome_seq,
+        alignment_start=60, alignment_end=90, exon2_start=200,
+    )
+    bam = _write_bam(tmp_path / "rescue.bam", [("chr1", 500)], reads)
+
+    report = diagnose_bam(
+        bam, fa, min_clip_len=8, cluster_key_len=12,
+        rescue_junctions=True, rescue_max_intron_len=1000,
+    )
+    assert report.junctions is not None
+    jr = report.junctions
+    assert jr.n_loci_attempted == 1
+    assert jr.n_loci_rescued == 1
+    assert len(jr.records) == 1
+    rec = jr.records[0]
+    assert rec.chrom == "chr1"
+    assert rec.intron_start == 90
+    assert rec.intron_end == 200
+    assert rec.strand == "+"
+    assert rec.donor == "GT"
+    assert rec.acceptor == "AG"
+    assert rec.n_loci == 1
+    assert rec.n_reads == 10
+    assert rec.margin == 0
+    assert rec.was_in_star_sj is False
+
+
+def test_margin_consistent_right_clip():
+    """``_margin_consistent`` for bam_right requires the adjacent
+    consensus's last m bases to equal ``contig_seq[hit - m : hit]``."""
+    from eukan.assembly.junction_rescue import _margin_consistent
+
+    contig_seq = "X" * 100 + "ATCGAT" + "Y" * 100  # "ATCGAT" at [100, 106)
+
+    # bam_right, m=3, hit=103 → contig_seq[100:103] = "ATC".
+    # adj last 3 = "ATC" → consistent.
+    assert _margin_consistent(
+        contig_seq, hit=103, q=10, bam_side="right",
+        margin=3, anchor_pos=0, anchor_adjacent_consensus="GGATC",
+    )
+    # Same setup but adj last 3 don't match
+    assert not _margin_consistent(
+        contig_seq, hit=103, q=10, bam_side="right",
+        margin=3, anchor_pos=0, anchor_adjacent_consensus="GGTTT",
+    )
+    # m=0 always passes (no constraint to check)
+    assert _margin_consistent(
+        contig_seq, hit=103, q=10, bam_side="right",
+        margin=0, anchor_pos=0, anchor_adjacent_consensus="GGTTT",
+    )
+
+
+def test_margin_consistent_left_clip():
+    """``_margin_consistent`` for bam_left requires the adjacent
+    consensus's first m bases to equal ``contig_seq[hit + q : hit + q + m]``."""
+    from eukan.assembly.junction_rescue import _margin_consistent
+
+    # Set up a contig with "ATCGAT" at positions [50, 56). For
+    # bam_left with hit=40 and q=10, the bases just past the seed match
+    # (i.e., contig_seq[50:53]) are "ATC". adj first 3 must equal "ATC".
+    contig_seq = "X" * 50 + "ATCGAT" + "Y" * 100
+
+    assert _margin_consistent(
+        contig_seq, hit=40, q=10, bam_side="left",
+        margin=3, anchor_pos=200, anchor_adjacent_consensus="ATCGG",
+    )
+    assert not _margin_consistent(
+        contig_seq, hit=40, q=10, bam_side="left",
+        margin=3, anchor_pos=200, anchor_adjacent_consensus="GGGGG",
+    )
+
+
+def test_rescue_rejects_no_dinuc_allowlist(tmp_path):
+    """When the candidate donor/acceptor is not in the allowlist, no
+    junction record is produced for that locus.
+    """
+    # Genome with a non-canonical (CG-CT) intron boundary. Default
+    # allowlist (canonical + semi-canonical) won't accept it.
+    genome_seq = _build_genome_with_intron(
+        intron_start=90, intron_end=200, total_len=500,
+        donor="CG", acceptor="CT",
+    )
+    fa = _write_fasta(tmp_path / "g_nc.fa", [("chr1", genome_seq)])
+    reads = _build_right_clip_reads(
+        10, genome_seq,
+        alignment_start=60, alignment_end=90, exon2_start=200,
+    )
+    bam = _write_bam(tmp_path / "rescue_nc.bam", [("chr1", 500)], reads)
+
+    report = diagnose_bam(
+        bam, fa, min_clip_len=8, cluster_key_len=12,
+        rescue_junctions=True,
+        rescue_dinuc_allowlist=["GT-AG", "CT-AC"],  # exclude CG-CT
+    )
+    assert report.junctions is not None
+    assert report.junctions.n_loci_attempted == 1
+    # Allowlist rejected — no record emitted
+    assert report.junctions.n_loci_rescued == 0
+    assert report.junctions.records == []
+
+
+def test_rescue_aggregation_across_loci():
+    """Two candidates with the same junction key collapse into one record."""
+    c1 = JunctionCandidate(
+        chrom="chr1", intron_start=100, intron_end=200, strand="+",
+        donor="GT", acceptor="AG", score=20.0, outward_match=20, margin=0,
+        n_reads=5, example_consensus="ACGTACGTACGTACGTACGT",
+    )
+    c2 = JunctionCandidate(
+        chrom="chr1", intron_start=100, intron_end=200, strand="+",
+        donor="GT", acceptor="AG", score=24.0, outward_match=25, margin=0,
+        n_reads=8, example_consensus="GGGGACGTACGTACGTACGTACGT",
+    )
+    records = aggregate_junctions([c1, c2], star_sj_set=set())
+    assert len(records) == 1
+    r = records[0]
+    assert r.n_loci == 2
+    assert r.n_reads == 13
+    assert r.max_outward_match == 25
+    # example_consensus comes from the best-evidence candidate
+    assert r.example_consensus == "GGGGACGTACGTACGTACGTACGT"
+
+
+def test_rescue_skips_trans_splicing_loci(tmp_path):
+    """A BAM-orient locus whose anchor key matches a top trans-splicing
+    cluster motif (n_loci >= 100) should be skipped (not counted as
+    attempted)."""
+    # Trivial 500 bp genome — the rescue search isn't even attempted.
+    genome_seq = "ACGT" * 125
+    fa = _write_fasta(tmp_path / "g_trans.fa", [("chr1", genome_seq)])
+
+    sl_motif = "TGCATGCATGCA"  # 12 bp K-bp anchor
+    bld = BamLocusData()
+    bld.n_clips = 10
+    # bam_side="left" → anchor key = last 12 bp of clip
+    clip = "AAAAAAAA" + sl_motif  # 20 bp
+    bld.clip_samples = [clip] * 10
+    bld.anchor_adjacent_samples = ["AAAAA"] * 10
+    bam_locus_data = {("chr1", 100, "left"): bld}
+
+    # sl_motif marked as a top trans-splicing cluster
+    top_clusters = [(sl_motif, 5000, 50_000)]
+    lc = LocusConsistencyStats(
+        n_loci_total=10, n_loci_singleton=0, n_loci_consistent=10,
+        n_loci_inconsistent=0, n_loci_short_only=0,
+    )
+
+    result = rescue_junctions_from_diagnostic(
+        bam_locus_data=bam_locus_data,
+        locus_consistency=lc,
+        top_clusters=top_clusters,
+        genome_path=fa,
+        cluster_key_len=12,
+        consensus_min_majority_fraction=0.6,
+        min_intron_len=20,
+        max_intron_len=1000,
+        min_locus_depth=5,
+        min_seed_extension=4,
+        dinuc_allowlist=None,
+        star_sj_path=None,
+        by_dinucleotide=None,
+    )
+    assert result.n_loci_attempted == 0
+    assert result.n_loci_rescued == 0
+    assert result.records == []
+
+
+def test_load_star_sj_set_marks_known_junctions(tmp_path):
+    """A rescued junction whose coords match the STAR SJ.out.tab gets
+    ``was_in_star_sj=True``."""
+    genome_seq = _build_genome_with_intron(
+        intron_start=90, intron_end=200, total_len=500,
+    )
+    fa = _write_fasta(tmp_path / "g_sj.fa", [("chr1", genome_seq)])
+    reads = _build_right_clip_reads(
+        10, genome_seq,
+        alignment_start=60, alignment_end=90, exon2_start=200,
+    )
+    bam = _write_bam(tmp_path / "rescue_sj.bam", [("chr1", 500)], reads)
+
+    # STAR SJ.out.tab: chrom, intron_start (1-based), intron_end (1-based),
+    # strand (1=+), motif, annot, unique, multi, overhang. Only the first 4
+    # are read.
+    sj_path = tmp_path / "STAR_SJ.out.tab"
+    with open(sj_path, "w") as f:
+        f.write("chr1\t91\t200\t1\t1\t0\t10\t0\t30\n")  # 1-based [91,200] = 0-based [90,200)
+
+    report = diagnose_bam(
+        bam, fa, min_clip_len=8, cluster_key_len=12,
+        rescue_junctions=True, rescue_max_intron_len=1000,
+        rescue_star_sj_path=sj_path,
+    )
+    assert report.junctions is not None
+    rec = report.junctions.records[0]
+    assert rec.was_in_star_sj is True
+    assert report.junctions.n_junctions_novel_vs_star == 0
+
+
+def test_one_mismatch_fallback(tmp_path):
+    """Introduce a single substitution in the search target — the
+    1-mismatch fallback should still find the junction."""
+    genome_seq = _build_genome_with_intron(
+        intron_start=90, intron_end=200, total_len=500,
+    )
+    # Mutate one base in the exon-2 prefix to mismatch the clip's seed
+    # in the genome. The READ keeps the original base (since reads are
+    # constructed from the genome), so we need to apply the mutation
+    # AFTER constructing reads.
+    reads = _build_right_clip_reads(
+        10, genome_seq,
+        alignment_start=60, alignment_end=90, exon2_start=200,
+    )
+    # Now mutate genome[210] (inside the 20-bp seed window) before
+    # writing the FASTA. Reads still have the original base in the clip.
+    mutated = list(genome_seq)
+    original = mutated[210]
+    mutated[210] = "T" if original != "T" else "A"
+    mutated_genome = "".join(mutated)
+    fa = _write_fasta(tmp_path / "g_mm.fa", [("chr1", mutated_genome)])
+
+    bam = _write_bam(tmp_path / "rescue_mm.bam", [("chr1", 500)], reads)
+    report = diagnose_bam(
+        bam, fa, min_clip_len=8, cluster_key_len=12,
+        rescue_junctions=True, rescue_max_intron_len=1000,
+    )
+    # Allowlist should still accept GT-AG; 1-mismatch fallback finds the hit
+    assert report.junctions is not None
+    assert report.junctions.n_loci_rescued == 1
+    rec = report.junctions.records[0]
+    assert rec.intron_start == 90
+    assert rec.intron_end == 200
+
+
+def test_emit_sj_tab_filtering(tmp_path):
+    """write_junctions_sj_tab filters by n_reads AND allowlist."""
+    records = [
+        # Passes: n_reads=5, GT-AG
+        JunctionRecord(
+            chrom="chr1", intron_start=100, intron_end=200, strand="+",
+            donor="GT", acceptor="AG", n_loci=1, n_reads=5,
+            max_outward_match=20, margin=0, was_in_star_sj=False,
+            example_consensus="ACGT" * 5,
+        ),
+        # Fails n_reads: only 2 supporting reads
+        JunctionRecord(
+            chrom="chr1", intron_start=300, intron_end=400, strand="+",
+            donor="GT", acceptor="AG", n_loci=1, n_reads=2,
+            max_outward_match=20, margin=0, was_in_star_sj=False,
+            example_consensus="ACGT" * 5,
+        ),
+        # Fails allowlist: TT-CC not in default canonical+semi list
+        JunctionRecord(
+            chrom="chr1", intron_start=500, intron_end=600, strand=".",
+            donor="TT", acceptor="CC", n_loci=1, n_reads=10,
+            max_outward_match=20, margin=0, was_in_star_sj=False,
+            example_consensus="ACGT" * 5,
+        ),
+    ]
+    out_path = tmp_path / "rescued.sj.tab"
+    n_written = write_junctions_sj_tab(records, out_path, min_reads=3)
+    assert n_written == 1
+    written = out_path.read_text().splitlines()
+    assert len(written) == 1
+    # STAR SJ: 1-based inclusive; intron_start=100 (0-based) → 101 (1-based);
+    # intron_end=200 (0-based exclusive) stays as 200 (1-based inclusive).
+    assert written[0].split("\t") == ["chr1", "101", "200", "+"]
