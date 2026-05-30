@@ -134,6 +134,17 @@ def merge_fully_overlapping_transcript_genes(
 # ---------------------------------------------------------------------------
 
 
+def _has_cds_descendants(db: gffutils.FeatureDB, gene: gffutils.Feature) -> bool:
+    """True if *gene* contains a CDS — directly or under one of its mRNA children."""
+    if any(c.featuretype == "CDS" for c in db.children(gene)):
+        return True
+    return any(
+        gc.featuretype == "CDS"
+        for mrna in db.children(gene, featuretype="mRNA")
+        for gc in db.children(mrna)
+    )
+
+
 def find_nonoverlapping_genes(
     db_source: gffutils.FeatureDB,
     db_target: gffutils.FeatureDB,
@@ -149,12 +160,8 @@ def find_nonoverlapping_genes(
         if target_index.has_overlap(gene):
             continue
 
-        # Check that this gene has CDS children (i.e., contains an ORF)
-        child_types = {f.featuretype for f in db_source.children(gene)}
-        if "CDS" not in child_types and not any(
-            "CDS" in {gc.featuretype for gc in db_source.children(c)}
-            for c in db_source.children(gene, featuretype="mRNA")
-        ):
+        # Keep only genes that contain an ORF (a CDS somewhere beneath them).
+        if not _has_cds_descendants(db_source, gene):
             continue
 
         result.append(gene)

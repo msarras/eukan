@@ -11,66 +11,72 @@ from eukan.settings import AssemblyConfig
 log = get_logger(__name__)
 
 
-def run_trinity(config: AssemblyConfig) -> None:
-    """Run genome-guided and de novo Trinity assembly."""
-    wd = config.work_dir
+def _run_trinity_mode(
+    config: AssemblyConfig,
+    *,
+    prefix: str,
+    cleanup_name: str,
+    log_message: str,
+    mode_args: list[str],
+) -> None:
+    """Run one Trinity mode and normalize its output to ``<prefix>.fasta``.
 
+    Skips when ``<prefix>.fasta`` already exists. *mode_args* carries the
+    mode-specific flags (genome-guided BAM vs de-novo reads); the shared
+    memory/CPU/cleanup/strand/jaccard flags are added here. Handles both the
+    ``--full_cleanup`` output (``<prefix>.<cleanup_name>`` beside the dir) and
+    the no-cleanup layout (``<prefix>/<cleanup_name>`` inside it), then removes
+    the working dir.
+    """
+    wd = config.work_dir
+    final = wd / f"{prefix}.fasta"
+    if final.exists():
+        return
+
+    log.info(log_message)
     lib_type_args = (
         ["--SS_lib_type", config.strand_specific] if config.strand_specific else []
     )
     jaccard_args = ["--jaccard_clip"] if config.jaccard_clip else []
+    run_cmd(
+        [
+            "Trinity",
+            *mode_args,
+            "--max_memory", f"{config.memory_gb}G",
+            "--CPU", str(config.num_cpu),
+            "--full_cleanup",
+            "--output", prefix,
+            *lib_type_args,
+            *jaccard_args,
+        ],
+        cwd=wd,
+    )
+    # --full_cleanup puts output at <prefix>.<cleanup_name> beside the dir;
+    # without it the file is <prefix>/<cleanup_name> inside the dir.
+    produced = wd / f"{prefix}.{cleanup_name}"
+    if not produced.exists():
+        produced = wd / prefix / cleanup_name
+    if produced.exists():
+        shutil.move(str(produced), str(final))
+    shutil.rmtree(wd / prefix, ignore_errors=True)
 
-    # Genome-guided assembly
-    gg_fasta = wd / "trinity-gg.fasta"
-    if not gg_fasta.exists():
-        log.info("Running genome-guided Trinity assembly...")
-        run_cmd(
-            [
-                "Trinity",
-                "--genome_guided_bam", "STAR_Aligned.sortedByCoord.out.bam",
-                "--genome_guided_max_intron", str(config.max_intron_len),
-                "--max_memory", f"{config.memory_gb}G",
-                "--CPU", str(config.num_cpu),
-                "--full_cleanup",
-                "--output", "trinity-gg",
-                *lib_type_args,
-                *jaccard_args,
-            ],
-            cwd=wd,
-        )
-        # --full_cleanup puts output at {output_prefix}.Trinity-GG.fasta
-        # alongside (not inside) the output dir
-        trinity_gg_output = wd / "trinity-gg.Trinity-GG.fasta"
-        if not trinity_gg_output.exists():
-            # Fallback: check inside the output dir (no --full_cleanup)
-            trinity_gg_output = wd / "trinity-gg" / "Trinity-GG.fasta"
-        if trinity_gg_output.exists():
-            shutil.move(str(trinity_gg_output), str(gg_fasta))
-        shutil.rmtree(wd / "trinity-gg", ignore_errors=True)
 
-    # De novo assembly
-    dn_fasta = wd / "trinity-denovo.fasta"
-    if not dn_fasta.exists():
-        log.info("Running de novo Trinity assembly...")
-        run_cmd(
-            [
-                "Trinity",
-                "--seqType", "fq",
-                "--max_memory", f"{config.memory_gb}G",
-                *config.reads_args_trinity,
-                "--CPU", str(config.num_cpu),
-                "--output", "trinity-denovo",
-                "--full_cleanup",
-                *lib_type_args,
-                *jaccard_args,
-            ],
-            cwd=wd,
-        )
-        # --full_cleanup puts output at {output_prefix}.Trinity.fasta
-        trinity_dn_output = wd / "trinity-denovo.Trinity.fasta"
-        if not trinity_dn_output.exists():
-            # Fallback: check inside the output dir (no --full_cleanup)
-            trinity_dn_output = wd / "trinity-denovo" / "Trinity.fasta"
-        if trinity_dn_output.exists():
-            shutil.move(str(trinity_dn_output), str(dn_fasta))
-        shutil.rmtree(wd / "trinity-denovo", ignore_errors=True)
+def run_trinity(config: AssemblyConfig) -> None:
+    """Run genome-guided and de novo Trinity assembly."""
+    _run_trinity_mode(
+        config,
+        prefix="trinity-gg",
+        cleanup_name="Trinity-GG.fasta",
+        log_message="Running genome-guided Trinity assembly...",
+        mode_args=[
+            "--genome_guided_bam", "STAR_Aligned.sortedByCoord.out.bam",
+            "--genome_guided_max_intron", str(config.max_intron_len),
+        ],
+    )
+    _run_trinity_mode(
+        config,
+        prefix="trinity-denovo",
+        cleanup_name="Trinity.fasta",
+        log_message="Running de novo Trinity assembly...",
+        mode_args=["--seqType", "fq", *config.reads_args_trinity],
+    )

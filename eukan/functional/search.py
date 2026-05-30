@@ -11,7 +11,7 @@ import gffutils
 import pyhmmer
 from Bio import SeqIO
 
-from eukan.gff.io import featuredb2gff3_file
+from eukan.gff.io import count_gff3_features, featuredb2gff3_file
 from eukan.infra.logging import get_logger
 
 log = get_logger(__name__)
@@ -184,6 +184,7 @@ def annotate_fasta(
 
     output_path = proteins.parent / f"{proteins.stem}.mod{proteins.suffix}"
 
+    count = 0
     with open(output_path, "w") as f:
         for rec in SeqIO.parse(str(proteins), "fasta"):
             parts = [homology_fmt.get(rec.id, "hypothetical protein"), f"length={len(rec.seq)}"]
@@ -191,7 +192,9 @@ def annotate_fasta(
                 parts.append(hmmscan_fmt[rec.id])
             rec.description = " ;; ".join(parts)
             SeqIO.write(rec, f, "fasta")
+            count += 1
 
+    log.info("Functional FASTA: annotated %d sequences -> %s", count, output_path.name)
     return output_path
 
 
@@ -268,6 +271,10 @@ def annotate_gff3(
     output_path = out_dir / f"{gff3_path.stem}.mod{gff3_path.suffix}"
     featuredb2gff3_file(gff3, output_path)
 
+    log.info(
+        "Functional GFF3: %d genes -> %s",
+        count_gff3_features(output_path), output_path.name,
+    )
     return output_path
 
 
