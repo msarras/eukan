@@ -8,6 +8,8 @@ from eukan.annotation.pipeline import force_steps_from_run_flags
 from eukan.assembly.pipeline import (
     force_steps_from_run_flags as assembly_force_steps_from_run_flags,
 )
+from eukan.infra.manifest import RunManifest
+from eukan.infra.pipeline import run_orchestrated_step
 
 
 class TestForceStepsFromRunFlags:
@@ -143,3 +145,46 @@ class TestAssemblyForceStepsFromRunFlags:
     def test_returned_keys_are_prefixed(self):
         result = assembly_force_steps_from_run_flags(run_star=True, run_pasa=True)
         assert all(k.startswith("assembly/") for k in result)
+
+
+class TestRunOrchestratedStepOutput:
+    """A declared output_file is recorded in the manifest even when missing,
+    so validate_step_outputs can flag it on resume instead of it being lost."""
+
+    def test_missing_declared_output_is_still_recorded(self, tmp_path):
+        manifest = RunManifest()
+        out = tmp_path / "step" / "expected.gff3"
+
+        def writes_nothing():
+            return None
+
+        result = run_orchestrated_step(
+            tmp_path, manifest, "annotation/thing",
+            writes_nothing,
+            step_dir=tmp_path / "step",
+            output_file=out,
+        )
+        assert result == out
+        record = manifest.steps["annotation/thing"]
+        assert record.output_file == str(out)
+        assert record.output_md5 is None  # nothing to checksum
+
+    def test_existing_declared_output_is_recorded_and_checksummed(self, tmp_path):
+        manifest = RunManifest()
+        out = tmp_path / "step" / "expected.gff3"
+
+        def writes_output():
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text("data")
+            return None
+
+        result = run_orchestrated_step(
+            tmp_path, manifest, "annotation/thing2",
+            writes_output,
+            step_dir=tmp_path / "step",
+            output_file=out,
+        )
+        assert result == out
+        record = manifest.steps["annotation/thing2"]
+        assert record.output_file == str(out)
+        assert record.output_md5 is not None

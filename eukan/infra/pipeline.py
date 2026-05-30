@@ -199,8 +199,12 @@ def run_orchestrated_step(
         result = fn(*args, **kwargs)
 
         if output_file is not None:
-            if output_file.exists():
-                step.output_file = str(output_file)
+            # Record the declared output even when it's missing: pipeline_step
+            # only checksums a path that exists, and validate_step_outputs
+            # flags a completed step whose recorded output is missing/empty on
+            # the next run — instead of silently recording "no output" and
+            # returning the path as if the step had succeeded.
+            step.output_file = str(output_file)
             return output_file
         if isinstance(result, (str, Path)):
             step.output_file = str(result)

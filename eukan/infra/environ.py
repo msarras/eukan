@@ -32,9 +32,14 @@ def _resolve(prefix: str, rel_path: str) -> str | None:
 
 
 def _prepend(env: dict[str, str], var: str, value: str) -> None:
-    """Prepend *value* to *var* unless it's already present."""
+    """Prepend *value* to *var* unless it's already present.
+
+    Membership is tested per path component (split on ``os.pathsep``), not by
+    substring, so ``/foo`` isn't wrongly treated as present when only
+    ``/foobar`` is on the path (and vice-versa for a missed duplicate).
+    """
     current = env.get(var, "")
-    if value not in current:
+    if value not in current.split(os.pathsep):
         env[var] = f"{value}{os.pathsep}{current}" if current else value
 
 

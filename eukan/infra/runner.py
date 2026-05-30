@@ -147,25 +147,28 @@ def run_cmd(
     cmd_str = " ".join(cmd)
     log.debug("Running: %s (cwd=%s)", cmd_str, cwd)
 
-    # File handles' lifetimes span the subprocess call; closed in finally.
-    in_handle = open(cwd / in_file, "rb") if in_file else None  # noqa: SIM115
-    out_handle = open(cwd / out_file, "wb") if out_file else None  # noqa: SIM115
-    err_handle = open(cwd / err_file, "wb") if err_file else None  # noqa: SIM115
+    # An ExitStack owns the redirect file handles so they're closed
+    # unconditionally — even if setup between opening them and starting the
+    # subprocess (fileno(), env build, Popen) raises before _tracked_popen's
+    # own cleanup could run.
+    with contextlib.ExitStack() as stack:
+        in_handle = stack.enter_context(open(cwd / in_file, "rb")) if in_file else None
+        out_handle = stack.enter_context(open(cwd / out_file, "wb")) if out_file else None
+        err_handle = stack.enter_context(open(cwd / err_file, "wb")) if err_file else None
 
-    stdin_target: int | None = in_handle.fileno() if in_handle else None
-    stdout_target: int = out_handle.fileno() if out_handle else subprocess.DEVNULL
-    stderr_target: int = err_handle.fileno() if err_handle else subprocess.PIPE
+        stdin_target: int | None = in_handle.fileno() if in_handle else None
+        stdout_target: int = out_handle.fileno() if out_handle else subprocess.DEVNULL
+        stderr_target: int = err_handle.fileno() if err_handle else subprocess.PIPE
 
-    tool = _tool_name(cmd)
-    # External tools occasionally emit non-UTF-8 bytes on stderr (e.g.
-    # AUGUSTUS surfaces raw locale-encoded bytes from its C++ layer); a
-    # strict decoder would crash before we ever see the message. errors
-    # only applies in text mode — pass it only when text=True so binary
-    # mode (binary=True) keeps returning raw bytes.
-    text_kwargs: dict[str, object] = (
-        {"text": True, "errors": "replace"} if not binary else {"text": False}
-    )
-    try:
+        tool = _tool_name(cmd)
+        # External tools occasionally emit non-UTF-8 bytes on stderr (e.g.
+        # AUGUSTUS surfaces raw locale-encoded bytes from its C++ layer); a
+        # strict decoder would crash before we ever see the message. errors
+        # only applies in text mode — pass it only when text=True so binary
+        # mode (binary=True) keeps returning raw bytes.
+        text_kwargs: dict[str, object] = (
+            {"text": True, "errors": "replace"} if not binary else {"text": False}
+        )
         with _tracked_popen(
             cmd,
             cwd=cwd,
@@ -187,10 +190,6 @@ def run_cmd(
                     tool=tool, returncode=-1, cmd=cmd,
                     stderr_snippet=str(exc),
                 ) from exc
-    finally:
-        for h in (in_handle, out_handle, err_handle):
-            if h is not None:
-                h.close()
 
     if stderr is None:
         stderr_text = ""

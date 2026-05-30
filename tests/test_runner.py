@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 
 import pytest
 
 from eukan.exceptions import ExternalToolError, MissingToolError
+from eukan.infra import runner
 from eukan.infra.runner import (
     _RUNNING,
     _track,
@@ -141,6 +143,33 @@ class TestRunCmd:
         # The undecodable byte is replaced rather than crashing the runner.
         assert exc_info.value.returncode == 2
         assert "BOOM" in exc_info.value.stderr_snippet
+
+
+class TestRunCmdResourceCleanup:
+    """Redirect file handles must not leak if setup raises before Popen."""
+
+    @staticmethod
+    def _fd_count() -> int:
+        return len(os.listdir(f"/proc/{os.getpid()}/fd"))
+
+    @pytest.mark.skipif(
+        not os.path.isdir(f"/proc/{os.getpid()}/fd"),
+        reason="needs /proc fd listing",
+    )
+    def test_setup_failure_does_not_leak_redirect_handles(self, tmp_path, monkeypatch):
+        """A raise between opening the out/err files and starting the child
+        must still close them. Pre-ExitStack this leaked 2 fds per call."""
+        def boom(_cmd):
+            raise RuntimeError("tool-name boom")
+
+        monkeypatch.setattr(runner, "_tool_name", boom)
+
+        baseline = self._fd_count()
+        for _ in range(40):
+            with pytest.raises(RuntimeError, match="tool-name boom"):
+                run_cmd(["true"], cwd=tmp_path, out_file="o.txt", err_file="e.txt")
+        # No monotonic growth: handles were closed each time.
+        assert self._fd_count() <= baseline + 1
 
 
 class TestRunPiped:
