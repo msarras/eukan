@@ -56,6 +56,7 @@ dependencies:
   - repeatmodeler>=2.0
   - rmblast
   - samtools>=1.20
+  - segemehl>=0.3.4
   - snap
   - spaln>=3.0
   - star>=2.7

@@ -81,6 +81,13 @@ required_by = ["assemble"]
 conda_package = "star"
 min_version = "2.7"
 
+[segemehl]
+binary = "segemehl.x"
+version_cmd = ["segemehl.x", "--help"]
+required_by = ["assemble"]
+conda_package = "segemehl"
+min_version = "0.3.4"
+
 [spaln]
 binary = "spaln"
 version_cmd = ["spaln", "-h"]

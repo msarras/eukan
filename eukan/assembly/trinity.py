@@ -69,7 +69,7 @@ def run_trinity(config: AssemblyConfig) -> None:
         cleanup_name="Trinity-GG.fasta",
         log_message="Running genome-guided Trinity assembly...",
         mode_args=[
-            "--genome_guided_bam", "STAR_Aligned.sortedByCoord.out.bam",
+            "--genome_guided_bam", config.aligner_bam,
             "--genome_guided_max_intron", str(config.max_intron_len),
         ],
     )

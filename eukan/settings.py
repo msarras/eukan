@@ -15,7 +15,7 @@ import string
 from enum import Enum
 from functools import cached_property
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -309,6 +309,7 @@ class AssemblyConfig(_StepRunSettings):
     max_intron_len: int = 5000
     phred_quality: int = 33
     strand_specific: str | None = None
+    aligner: Literal["star", "segemehl"] = "star"
     align_mode: str = "Local"
     jaccard_clip: bool = False
     splice_permissive: bool = False
@@ -321,11 +322,28 @@ class AssemblyConfig(_StepRunSettings):
 
     @computed_field  # type: ignore[prop-decorator]
     @property
+    def aligner_bam(self) -> str:
+        """Coordinate-sorted BAM filename produced by the active aligner."""
+        if self.aligner == "segemehl":
+            return "segemehl_Aligned.sortedByCoord.out.bam"
+        return "STAR_Aligned.sortedByCoord.out.bam"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
     def reads_args_star(self) -> list[str]:
         if self.left_reads and self.right_reads:
             return [str(self.left_reads), str(self.right_reads)]
         elif self.single_reads:
             return [str(self.single_reads)]
+        raise ValueError("No read files provided")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def reads_args_segemehl(self) -> list[str]:
+        if self.left_reads and self.right_reads:
+            return ["-q", str(self.left_reads), "-p", str(self.right_reads)]
+        elif self.single_reads:
+            return ["-q", str(self.single_reads)]
         raise ValueError("No read files provided")
 
     @computed_field  # type: ignore[prop-decorator]

@@ -146,6 +146,14 @@ class TestToolRegistry:
             assert tool.version_cmd
             assert len(tool.required_by) > 0
 
+    def test_segemehl_registered(self):
+        """segemehl (bioconda 0.3.4) is registered for the assemble pipeline."""
+        seg = {t.name: t for t in load_tools()}["segemehl"]
+        assert seg.binary == "segemehl.x"
+        assert seg.conda_package == "segemehl"
+        assert seg.min_version == "0.3.4"
+        assert "assemble" in seg.required_by
+
 
 class TestRunChecks:
     def test_filters_by_subcommand(self):
@@ -232,3 +240,8 @@ class TestGenerateEnv:
         """spaln should appear only once despite spaln/makdbs sharing a package."""
         content = generate_environment_yml()
         assert content.count("- spaln") == 1
+
+    def test_includes_segemehl(self):
+        """segemehl is emitted from tools.toml with its bioconda version pin."""
+        content = generate_environment_yml()
+        assert "segemehl>=0.3.4" in content

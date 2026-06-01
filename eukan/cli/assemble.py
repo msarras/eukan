@@ -31,9 +31,16 @@ from eukan.cli._framework import (
     help="Strand-specific library type.",
 )
 @optgroup.option(
+    "--aligner", type=click.Choice(["star", "segemehl"]),
+    default="star", show_default=True,
+    help="Read aligner. segemehl is splice-agnostic (captures non-canonical "
+    "splice sites STAR misses); STAR is the default.",
+)
+@optgroup.option(
     "--align-mode", "-t", type=click.Choice(["EndToEnd", "Local"]),
     default="Local", show_default=True,
-    help="STAR read alignment mode (end-to-end vs soft-clipped local).",
+    help="STAR read alignment mode (end-to-end vs soft-clipped local). "
+    "STAR only; ignored when --aligner segemehl.",
 )
 @optgroup.option(
     "--splice-permissive", is_flag=True, default=False,
@@ -64,6 +71,7 @@ from eukan.cli._framework import (
 )
 @optgroup.group("Re-run steps")
 @optgroup.option("--run-star", "-A", is_flag=True, help="Force re-run STAR read mapping.")
+@optgroup.option("--run-segemehl", is_flag=True, help="Force re-run segemehl read mapping.")
 @optgroup.option("--run-trinity", "-T", is_flag=True, help="Force re-run Trinity assembly.")
 @optgroup.option("--run-pasa", "-P", is_flag=True, help="Force re-run PASA alignment.")
 @force_option
@@ -77,8 +85,10 @@ def assemble(
     phred: str,
     numcpu: int,
     strand_specific: str | None,
+    aligner: str,
     align_mode: str,
     run_star: bool,
+    run_segemehl: bool,
     run_trinity: bool,
     run_pasa: bool,
     jaccard_clip: bool,
@@ -126,6 +136,7 @@ def assemble(
         max_intron_len=max_intron,
         phred_quality=int(phred),
         num_cpu=numcpu,
+        aligner=aligner,
         align_mode=align_mode,
         jaccard_clip=jaccard_clip,
         splice_permissive=splice_permissive,
@@ -139,7 +150,9 @@ def assemble(
     ))
 
     force_steps = force_steps_from_run_flags(
-        run_star=run_star, run_trinity=run_trinity, run_pasa=run_pasa, force=force,
+        aligner=aligner,
+        run_star=run_star, run_segemehl=run_segemehl,
+        run_trinity=run_trinity, run_pasa=run_pasa, force=force,
     )
     run_assembly(config, force_steps=force_steps or None)
     click.echo("Done.")
