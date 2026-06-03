@@ -13,7 +13,11 @@ splice sites via ``--allow_hinted_splicesites``.
 
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
+
 from eukan.assembly.align_hints import generate_rnaseq_hints, sj_table_from_bam
+from eukan.exceptions import ExternalToolError
 from eukan.infra.logging import get_logger
 from eukan.infra.runner import run_cmd, run_piped
 from eukan.settings import AssemblyConfig
@@ -21,8 +25,85 @@ from eukan.settings import AssemblyConfig
 log = get_logger(__name__)
 
 _BAM = "segemehl_Aligned.sortedByCoord.out.bam"
+_UNSORTED_BAM = "segemehl_unsorted.bam"
 _SJ = "segemehl_SJ.out.tab"
 _INDEX = "segemehl.idx"
+# segemehl emits split-read byproducts as <base>.sngl.bed / .mult.bed / .trns.txt;
+# pin <base> to a known path so they can be cleaned up afterwards.
+_SPLITS_BASE = "segemehl_splits"
+_SPLITS_SUFFIXES = (".sngl.bed", ".mult.bed", ".trns.txt")
+
+# The coordinate-sort needs transient room for its temp spill (~= the sorted
+# size) plus the final BAM, both landing on the run-dir filesystem — roughly
+# twice the unsorted BAM. Warn before sorting when free space is below this.
+_SORT_DISK_HEADROOM = 2
+# samtools' multithreaded BGZF writer reports a failed write on a full disk
+# with a misleading errno (e.g. "...: Illegal seek"); match these stderr
+# fragments so we can translate the cryptic failure into a clear out-of-space
+# message instead of letting the user chase a phantom seek bug.
+_DISK_FULL_MARKERS = ("illegal seek", "no space", "failed writing", "write failed")
+
+
+def _bam_is_complete(path: Path) -> bool:
+    """True if *path* is a non-empty BAM with a valid BGZF EOF (``quickcheck``).
+
+    Lets a re-run reuse an unsorted BAM from a previous attempt that failed
+    only in the downstream sort (segemehl mapping is the multi-hour step, so we
+    never want to redo it when its output survived). A truncated BAM from an
+    interrupted or killed segemehl fails quickcheck and is re-mapped.
+    """
+    if not path.exists() or path.stat().st_size == 0:
+        return False
+    try:
+        run_cmd(["samtools", "quickcheck", str(path)], cwd=path.parent)
+    except ExternalToolError:
+        return False
+    return True
+
+
+def _coordinate_sort_and_filter(unsorted: Path, wd: Path, num_cpu: int) -> None:
+    """Drop unmapped reads (``-F 4``) and coordinate-sort into the final BAM.
+
+    Mirrors the validated recipe's ``samtools sort | samtools view -bh -F 4``;
+    filtering before the sort is cheaper and yields the same result. On a tight
+    disk this is the step that fails — samtools needs roughly twice the unsorted
+    BAM in transient temp + output space — so we warn up front and, on a
+    write/seek failure, re-raise with an explicit out-of-space hint.
+    """
+    if unsorted.exists():
+        src = unsorted.stat().st_size
+        free = shutil.disk_usage(wd).free
+        if free < _SORT_DISK_HEADROOM * src:
+            log.warning(
+                "Low disk for coordinate-sort: %.1f GB free vs ~%.1f GB likely "
+                "needed (temp spill + output for a %.1f GB BAM). If it fails, "
+                "free space and re-run — the unsorted BAM is reused, so segemehl "
+                "will not re-map.",
+                free / 1e9, _SORT_DISK_HEADROOM * src / 1e9, src / 1e9,
+            )
+    try:
+        run_piped(
+            ["samtools", "view", "-bh", "-F", "4", str(unsorted)],
+            ["samtools", "sort", "-@", str(num_cpu), "-o", _BAM, "-"],
+            cwd=wd,
+        )
+    except ExternalToolError as exc:
+        snippet = (exc.stderr_snippet or "").lower()
+        if any(marker in snippet for marker in _DISK_FULL_MARKERS):
+            raise ExternalToolError(
+                "samtools sort failed writing the coordinate-sorted BAM, which "
+                "on a full filesystem samtools reports as 'Illegal seek'. The "
+                "sort needs roughly twice the unsorted BAM in transient temp + "
+                "output space.",
+                tool=exc.tool, returncode=exc.returncode, cmd=exc.cmd,
+                stderr_snippet=exc.stderr_snippet,
+                hint=(
+                    "Free space on the run-dir filesystem (or run the assemble "
+                    "step on a larger disk), then re-run: segemehl reuses the "
+                    "existing unsorted BAM and skips the slow re-mapping."
+                ),
+            ) from exc
+        raise
 
 
 def map_reads_segemehl(config: AssemblyConfig) -> None:
@@ -31,24 +112,58 @@ def map_reads_segemehl(config: AssemblyConfig) -> None:
     log.info("Running segemehl read mapping...")
 
     index = wd / _INDEX
-    if not index.exists():
-        run_cmd(["segemehl.x", "-x", str(index), "-d", str(config.genome)], cwd=wd)
+    unsorted = wd / _UNSORTED_BAM
 
-    # segemehl writes SAM to stdout; pipe straight into samtools for a sorted
-    # BAM. `-S` enables split-read (spliced) mapping; `-` makes samtools read
-    # the alignment stream from stdin.
-    run_piped(
-        [
-            "segemehl.x",
-            "-i", str(index),
-            "-d", str(config.genome),
-            *config.reads_args_segemehl,
-            "-S",
-            "-t", str(config.num_cpu),
-        ],
-        ["samtools", "sort", "-@", str(config.num_cpu), "-o", _BAM, "-"],
-        cwd=wd,
-    )
+    # segemehl mapping is the multi-hour step. If a previous run already
+    # produced a complete unsorted BAM (and only the downstream sort failed —
+    # e.g. on a full disk), reuse it rather than re-mapping. quickcheck rejects
+    # a truncated BAM from an interrupted segemehl, which is then re-mapped.
+    if _bam_is_complete(unsorted):
+        log.info(
+            "Reusing %s from a previous run; skipping segemehl mapping "
+            "(delete it to force a full re-map).",
+            unsorted.name,
+        )
+    else:
+        if not index.exists():
+            run_cmd(["segemehl.x", "-x", str(index), "-d", str(config.genome)], cwd=wd)
+
+        # segemehl loads the whole suffix-array index + genome into memory, so
+        # it is RAM-hungry on large genomes. Write the BAM straight to disk
+        # with `-b -o` instead of piping into samtools: run_cmd then checks
+        # segemehl's *own* exit status, so an OOM kill, a mate-count mismatch,
+        # or any other crash surfaces as a clear segemehl error rather than a
+        # misleading downstream "samtools: failed to read header".
+        #
+        # Flags mirror the validated `segemehl-H0.bam` recipe: `-H 0` reports
+        # all (not just best-scoring) alignments, capturing multi-mapping
+        # spliced reads; `-S <base>` enables split/spliced mapping and pins the
+        # byproduct BED files to a known location for cleanup. segemehl reads
+        # gzipped FASTQ natively, so `.fastq.gz` inputs need no decompression.
+        run_cmd(
+            [
+                "segemehl.x",
+                "-H", "0",
+                "-i", str(index),
+                "-d", str(config.genome),
+                *config.reads_args_segemehl,
+                "-S", str(wd / _SPLITS_BASE),
+                "-t", str(config.num_cpu),
+                "-b",
+                "-o", str(unsorted),
+            ],
+            cwd=wd,
+        )
+
+    # Mapping is done; the index and split-read BEDs are never read again
+    # (junctions come from the BAM). Delete them now, *before* the sort, so
+    # their several GB don't compete with the sort's temp spill + output on a
+    # tight disk — a `-H 0` run plus sort scratch can need well over 10 GB.
+    index.unlink(missing_ok=True)
+    for suffix in _SPLITS_SUFFIXES:
+        (wd / f"{_SPLITS_BASE}{suffix}").unlink(missing_ok=True)
+
+    _coordinate_sort_and_filter(unsorted, wd, config.num_cpu)
     run_cmd(["samtools", "index", _BAM], cwd=wd)
 
     # Derive a STAR-format SJ.out.tab from the BAM, then reuse STAR's
@@ -64,5 +179,5 @@ def map_reads_segemehl(config: AssemblyConfig) -> None:
         diagnose=config.diagnose_softclips, source_label="segemehl",
     )
 
-    # The genome index can be large; drop it once mapping is done.
-    index.unlink(missing_ok=True)
+    # The unsorted BAM is no longer needed once the sorted BAM + hints exist.
+    unsorted.unlink(missing_ok=True)

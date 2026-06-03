@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pysam
+import pytest
 
 from eukan.assembly.align_hints import (
     analyze_splice_sites,
@@ -20,6 +21,7 @@ from eukan.assembly.align_hints import (
     write_intron_hints,
 )
 from eukan.assembly.pipeline import _steps_for, force_steps_from_run_flags
+from eukan.exceptions import ExternalToolError
 from eukan.settings import AssemblyConfig
 
 # (start, end) 0-based half-open intron, n_unique (NH=1), n_multi (NH=2)
@@ -180,3 +182,125 @@ def test_assembly_config_aligner_fields(tmp_path):
     ]
     star_cfg = cfg.model_copy(update={"aligner": "star"})
     assert star_cfg.aligner_bam == "STAR_Aligned.sortedByCoord.out.bam"
+
+
+def test_map_reads_segemehl_matches_h0_recipe(tmp_path, monkeypatch):
+    """segemehl writes BAM to a file with the validated `-H 0` recipe, then a
+    separate stage filters unmapped reads (`-F 4`) and coordinate-sorts.
+
+    Writing the BAM via run_cmd (not piping segemehl's stdout) means
+    segemehl's own exit status surfaces on failure — an OOM kill or a
+    mate-count mismatch shows as a segemehl error, not a downstream
+    "samtools: failed to read header".
+    """
+    from eukan.assembly import segemehl as seg_mod
+
+    cmds: list[list[str]] = []
+    pipes: list[tuple[list[str], list[str]]] = []
+    monkeypatch.setattr(seg_mod, "run_cmd", lambda cmd, **kw: cmds.append(list(cmd)))
+    monkeypatch.setattr(
+        seg_mod, "run_piped", lambda c1, c2, **kw: pipes.append((list(c1), list(c2)))
+    )
+    monkeypatch.setattr(seg_mod, "sj_table_from_bam", lambda *a, **k: tmp_path / "sj.tab")
+    monkeypatch.setattr(seg_mod, "generate_rnaseq_hints", lambda *a, **k: None)
+
+    cfg = AssemblyConfig(
+        genome=tmp_path / "g.fa", work_dir=tmp_path, manifest_dir=tmp_path,
+        num_cpu=4, aligner="segemehl",
+        left_reads=tmp_path / "l.fq.gz", right_reads=tmp_path / "r.fq.gz",
+    )
+    seg_mod.map_reads_segemehl(cfg)
+
+    # Mapping invocation: reports all hits (-H 0), split mode (-S), writes a
+    # BAM to a file (-b -o) rather than to stdout.
+    seg_cmd = next(c for c in cmds if c and c[0] == "segemehl.x" and "-i" in c)
+    assert seg_cmd[seg_cmd.index("-H") + 1] == "0"
+    assert "-b" in seg_cmd
+    assert seg_cmd[seg_cmd.index("-o") + 1].endswith(".bam")
+    assert "-S" in seg_cmd
+
+    # Post-process: drop unmapped reads (-F 4), then coordinate-sort, as one
+    # piped stage; the sorted BAM is then indexed.
+    view, sort = pipes[0]
+    assert view[:2] == ["samtools", "view"]
+    assert view[view.index("-F") + 1] == "4"
+    assert sort[:2] == ["samtools", "sort"]
+    assert any(c[:2] == ["samtools", "index"] for c in cmds)
+
+
+def _segemehl_cfg(tmp_path):
+    return AssemblyConfig(
+        genome=tmp_path / "g.fa", work_dir=tmp_path, manifest_dir=tmp_path,
+        num_cpu=4, aligner="segemehl",
+        left_reads=tmp_path / "l.fq.gz", right_reads=tmp_path / "r.fq.gz",
+    )
+
+
+def test_map_reads_segemehl_resumes_and_frees_index_splits(tmp_path, monkeypatch):
+    """A complete unsorted BAM from a prior run is reused (no re-mapping), and
+    the index + split-read BEDs are deleted *before* the sort so they don't eat
+    the disk the sort needs. This is the recovery path for a run that mapped
+    successfully (multi-hour) but failed downstream in the sort.
+    """
+    from eukan.assembly import segemehl as seg_mod
+
+    cmds: list[list[str]] = []
+    pipes: list[tuple[list[str], list[str]]] = []
+    monkeypatch.setattr(seg_mod, "run_cmd", lambda cmd, **kw: cmds.append(list(cmd)))
+    monkeypatch.setattr(
+        seg_mod, "run_piped", lambda c1, c2, **kw: pipes.append((list(c1), list(c2)))
+    )
+    monkeypatch.setattr(seg_mod, "sj_table_from_bam", lambda *a, **k: tmp_path / "sj.tab")
+    monkeypatch.setattr(seg_mod, "generate_rnaseq_hints", lambda *a, **k: None)
+    monkeypatch.setattr(seg_mod, "_bam_is_complete", lambda p: True)
+
+    # Leftovers from the prior (failed-at-sort) run.
+    (tmp_path / "segemehl_unsorted.bam").write_bytes(b"BAMDATA")
+    (tmp_path / "segemehl.idx").write_bytes(b"INDEX")
+    for suffix in (".sngl.bed", ".mult.bed", ".trns.txt"):
+        (tmp_path / f"segemehl_splits{suffix}").write_bytes(b"SPLIT")
+
+    seg_mod.map_reads_segemehl(_segemehl_cfg(tmp_path))
+
+    # No segemehl invocation at all — neither index build nor (re-)mapping.
+    assert not any(c and c[0] == "segemehl.x" for c in cmds)
+    # Index + split BEDs were reclaimed before the sort.
+    assert not (tmp_path / "segemehl.idx").exists()
+    for suffix in (".sngl.bed", ".mult.bed", ".trns.txt"):
+        assert not (tmp_path / f"segemehl_splits{suffix}").exists()
+    # The sort + filter + index still run.
+    assert pipes and pipes[0][0][:2] == ["samtools", "view"]
+    assert any(c[:2] == ["samtools", "index"] for c in cmds)
+
+
+def test_map_reads_segemehl_translates_disk_full(tmp_path, monkeypatch):
+    """A samtools 'Illegal seek' (a full-disk write failure during the merge)
+    is re-raised as a clear out-of-space error whose hint points at freeing
+    space and notes that the unsorted BAM is reused on re-run.
+    """
+    from eukan.assembly import segemehl as seg_mod
+
+    monkeypatch.setattr(seg_mod, "run_cmd", lambda cmd, **kw: None)
+    monkeypatch.setattr(seg_mod, "sj_table_from_bam", lambda *a, **k: tmp_path / "sj.tab")
+    monkeypatch.setattr(seg_mod, "generate_rnaseq_hints", lambda *a, **k: None)
+    monkeypatch.setattr(seg_mod, "_bam_is_complete", lambda p: True)
+    (tmp_path / "segemehl_unsorted.bam").write_bytes(b"BAMDATA")
+
+    def boom(c1, c2, **kw):
+        raise ExternalToolError(
+            "samtools failed (exit 1)", tool="samtools", returncode=1, cmd=c2,
+            stderr_snippet=(
+                "[bam_sort_core] merging from 10 files...\n"
+                'samtools sort: failed writing to "out.bam": Illegal seek'
+            ),
+        )
+
+    monkeypatch.setattr(seg_mod, "run_piped", boom)
+
+    with pytest.raises(ExternalToolError) as exc_info:
+        seg_mod.map_reads_segemehl(_segemehl_cfg(tmp_path))
+
+    # Original samtools stderr preserved, plus an actionable disk hint.
+    assert "Illegal seek" in exc_info.value.stderr_snippet
+    assert exc_info.value.hint is not None
+    assert "re-map" in exc_info.value.hint.lower() or "reuse" in exc_info.value.hint.lower()
