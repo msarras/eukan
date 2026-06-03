@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import subprocess
+import tempfile
 import threading
 import time
 from collections.abc import Iterator
@@ -227,9 +228,14 @@ def run_piped(
     log.debug("Running pipe: %s", cmd_str)
 
     env = _subprocess_env()
-    with _tracked_popen(
+    # Drain the producer's stderr to a temp file rather than an unread PIPE: an
+    # unread stderr PIPE deadlocks any producer chatty enough to fill the
+    # ~64 KB buffer before the consumer drains its stdout. Capturing it also
+    # lets us report *why* the producer died (e.g. an OOM kill) instead of
+    # only the consumer's downstream symptom.
+    with tempfile.TemporaryFile() as p1_err, _tracked_popen(
         cmd1, cwd=cwd, env=env, missing_tool=_tool_name(cmd1),
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=p1_err,
     ) as p1:
         assert p1.stdout is not None  # PIPE was requested above
         try:
@@ -245,6 +251,8 @@ def run_piped(
             p1.wait()
             raise
         p1.wait()
+        p1_err.seek(0)
+        producer_err = p1_err.read().decode(errors="replace")
 
     output = stdout.decode(errors="replace")
 
@@ -254,12 +262,31 @@ def run_piped(
 
     if p2.returncode != 0:
         stderr_text = stderr.decode(errors="replace")
+        # Fold in the producer's fate so a crashed/OOM-killed producer feeding
+        # an empty stream isn't masked by the consumer's "no input" error.
+        if p1.returncode not in (0, None):
+            stderr_text = (
+                f"{_tool_name(cmd1)} (producer) exited {p1.returncode}: "
+                f"{producer_err.strip()}\n{stderr_text}"
+            )
         raise ExternalToolError(
             f"{_tool_name(cmd2)} failed (exit {p2.returncode})",
             tool=_tool_name(cmd2),
             returncode=p2.returncode,
             cmd=cmd2,
             stderr_snippet=stderr_text,
+        )
+
+    # Consumer succeeded but the producer failed: its output was truncated, so
+    # the pipeline result is unreliable. SIGPIPE (-13 / 141) is excluded — that
+    # just means the consumer stopped reading early, which is legitimate.
+    if p1.returncode not in (0, None, -13, 141):
+        raise ExternalToolError(
+            f"{_tool_name(cmd1)} failed (exit {p1.returncode})",
+            tool=_tool_name(cmd1),
+            returncode=p1.returncode,
+            cmd=cmd1,
+            stderr_snippet=producer_err,
         )
 
     return output
