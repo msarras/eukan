@@ -79,6 +79,10 @@ from eukan.cli._framework import (
 @optgroup.option("--run-trinity", "-T", is_flag=True, help="Force re-run Trinity assembly.")
 @optgroup.option("--run-rnaspades", is_flag=True, help="Force re-run rnaSPAdes assembly.")
 @optgroup.option("--run-sl-deplete", is_flag=True, help="Force re-run SL depletion.")
+@optgroup.option(
+    "--run-map-transcripts", is_flag=True,
+    help="Force re-run segemehl transcript→genome mapping.",
+)
 @optgroup.option("--run-pasa", "-P", is_flag=True, help="Force re-run PASA alignment.")
 @force_option
 def assemble(
@@ -98,6 +102,7 @@ def assemble(
     run_trinity: bool,
     run_rnaspades: bool,
     run_sl_deplete: bool,
+    run_map_transcripts: bool,
     run_pasa: bool,
     jaccard_clip: bool,
     rnaspades: bool,
@@ -163,7 +168,8 @@ def assemble(
         aligner=aligner,
         run_star=run_star, run_segemehl=run_segemehl,
         run_trinity=run_trinity, run_rnaspades=run_rnaspades,
-        run_sl_deplete=run_sl_deplete, run_pasa=run_pasa, force=force,
+        run_sl_deplete=run_sl_deplete, run_map_transcripts=run_map_transcripts,
+        run_pasa=run_pasa, force=force,
     )
     run_assembly(config, force_steps=force_steps or None)
     click.echo("Done.")

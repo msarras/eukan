@@ -61,8 +61,10 @@ def _bam_is_complete(path: Path) -> bool:
     return True
 
 
-def _coordinate_sort_and_filter(unsorted: Path, wd: Path, num_cpu: int) -> None:
-    """Drop unmapped reads (``-F 4``) and coordinate-sort into the final BAM.
+def _coordinate_sort_and_filter(
+    unsorted: Path, out_bam: str, wd: Path, num_cpu: int
+) -> None:
+    """Drop unmapped reads (``-F 4``) and coordinate-sort into *out_bam*.
 
     Mirrors the validated recipe's ``samtools sort | samtools view -bh -F 4``;
     filtering before the sort is cheaper and yields the same result. On a tight
@@ -84,7 +86,7 @@ def _coordinate_sort_and_filter(unsorted: Path, wd: Path, num_cpu: int) -> None:
     try:
         run_piped(
             ["samtools", "view", "-bh", "-F", "4", str(unsorted)],
-            ["samtools", "sort", "-@", str(num_cpu), "-o", _BAM, "-"],
+            ["samtools", "sort", "-@", str(num_cpu), "-o", out_bam, "-"],
             cwd=wd,
         )
     except ExternalToolError as exc:
@@ -163,7 +165,7 @@ def map_reads_segemehl(config: AssemblyConfig) -> None:
     for suffix in _SPLITS_SUFFIXES:
         (wd / f"{_SPLITS_BASE}{suffix}").unlink(missing_ok=True)
 
-    _coordinate_sort_and_filter(unsorted, wd, config.num_cpu)
+    _coordinate_sort_and_filter(unsorted, _BAM, wd, config.num_cpu)
     run_cmd(["samtools", "index", _BAM], cwd=wd)
 
     # Derive a STAR-format SJ.out.tab from the BAM, then reuse STAR's
@@ -181,3 +183,93 @@ def map_reads_segemehl(config: AssemblyConfig) -> None:
 
     # The unsorted BAM is no longer needed once the sorted BAM + hints exist.
     unsorted.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Transcript -> genome mapping (feeds the combinr consolidation step)
+# ---------------------------------------------------------------------------
+
+_TX_INDEX = "segemehl_tx.idx"
+# (query FASTA, output BAM) for each assembly. The de novo assemblies are
+# SL-depleted upstream (Phase 3); genome-guided Trinity is mapped as-is.
+_TRANSCRIPT_SETS: tuple[tuple[str, str], ...] = (
+    ("trinity-gg.fasta", "trinity-gg.genome.bam"),
+    ("trinity-denovo.sl_depleted.fasta", "trinity-denovo.genome.bam"),
+    ("rnaspades.sl_depleted.fasta", "rnaspades.genome.bam"),
+)
+_GENOME_BAM_SUFFIX = ".genome.bam"
+
+
+def _map_one_transcript_set(
+    config: AssemblyConfig, index: Path, query: Path, out_bam: str
+) -> None:
+    """Map one assembly's transcripts to the genome → sorted, indexed *out_bam*."""
+    wd = config.work_dir
+    final = wd / out_bam
+    if _bam_is_complete(final):
+        log.info("Reusing %s; skipping segemehl transcript mapping.", final.name)
+        return
+
+    stem = out_bam[: -len(_GENOME_BAM_SUFFIX)]
+    unsorted = wd / f"{stem}.genome.unsorted.bam"
+    splits_base = wd / f"{stem}_splits"
+    if not _bam_is_complete(unsorted):
+        # Same recipe as the read mapper plus `-e` (brief M-only CIGAR so combinr
+        # and samtools parse standard ops): `-H 0` reports all alignments
+        # (multi-copy genes map to several loci), `-S` enables split/spliced
+        # mapping (transcripts span introns; trans-spliced ones split across
+        # loci). One transcript == one query record, so `-q` takes the FASTA.
+        run_cmd(
+            [
+                "segemehl.x",
+                "-H", "0",
+                "-e",
+                "-i", str(index),
+                "-d", str(config.genome),
+                "-q", str(query),
+                "-S", str(splits_base),
+                "-t", str(config.num_cpu),
+                "-b",
+                "-o", str(unsorted),
+            ],
+            cwd=wd,
+        )
+
+    _coordinate_sort_and_filter(unsorted, out_bam, wd, config.num_cpu)
+    run_cmd(["samtools", "index", out_bam], cwd=wd)
+    unsorted.unlink(missing_ok=True)
+    for suffix in _SPLITS_SUFFIXES:
+        Path(f"{splits_base}{suffix}").unlink(missing_ok=True)
+
+
+def map_transcripts_segemehl(config: AssemblyConfig) -> None:
+    """Map assembled transcripts to the genome with segemehl (input to combinr).
+
+    Produces one coordinate-sorted BAM per assembly present in the work dir:
+    genome-guided Trinity, SL-depleted de novo Trinity, and (when enabled)
+    SL-depleted rnaSPAdes. Each query is mapped in split/spliced mode (``-S``),
+    reporting all alignments (``-H 0``) with brief CIGARs (``-e``). The genome
+    index is built once and reused across queries. Per-query resume: a BAM that
+    passes ``samtools quickcheck`` is left untouched.
+    """
+    wd = config.work_dir
+    sets = [
+        (wd / query, out_bam)
+        for query, out_bam in _TRANSCRIPT_SETS
+        if (wd / query).exists() and (wd / query).stat().st_size > 0
+    ]
+    if not sets:
+        log.warning("No assembled transcripts found to map; skipping.")
+        return
+
+    index = wd / _TX_INDEX
+    if not index.exists():
+        run_cmd(["segemehl.x", "-x", str(index), "-d", str(config.genome)], cwd=wd)
+    try:
+        for query, out_bam in sets:
+            log.info("segemehl mapping transcripts %s -> %s ...", query.name, out_bam)
+            _map_one_transcript_set(config, index, query, out_bam)
+    finally:
+        # The genome index is regenerable; drop it so it doesn't linger in the
+        # run dir (a partial run rebuilds it cheaply next time).
+        index.unlink(missing_ok=True)
