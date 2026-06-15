@@ -2,15 +2,33 @@
 
 from __future__ import annotations
 
+import os
+import shutil
+from collections import Counter
 from pathlib import Path
 
+import pytest
+
 from eukan.annotation import combinr_consensus as cc
+from eukan.annotation import consensus as cons
 from eukan.annotation.combinr_consensus import (
     _chains_to_match,
     _stage_combinr_inputs,
     run_combinr_consensus,
 )
 from eukan.settings import PipelineConfig
+
+
+def _resolve_combinr() -> Path | None:
+    """Locate a combinr binary: $COMBINR_BIN, else PATH. None → skip e2e test."""
+    env = os.environ.get("COMBINR_BIN")
+    if env and Path(env).exists():
+        return Path(env)
+    on_path = shutil.which("combinr")
+    return Path(on_path) if on_path else None
+
+
+_COMBINR = _resolve_combinr()
 
 
 def _config(tmp_path: Path, **kw) -> PipelineConfig:
@@ -223,3 +241,132 @@ def test_combinr_path_override(tmp_path, monkeypatch):
     calls = _capture_run_cmd(monkeypatch)
     run_combinr_consensus(cfg, sdir, [prot], transcripts=None)
     assert calls[0][0][0] == str(binpath)
+
+
+# --- integration: combinr output through eukan's prettify tail --------------
+
+# A compact slice of real `combinr consensus --alt-splice` output: one locus
+# with a consensus mRNA plus a wider transcript isoform carrying 5'/3' UTR, and
+# combinr's mRNA attributes (support/score/low_support/contains).
+_COMBINR_ALTSPLICE_GFF = """\
+chr1\tcombinr\tgene\t60\t260\t.\t+\t.\tID=evm.chr1.g1
+chr1\tcombinr\tmRNA\t100\t198\t.\t+\t.\tID=evm.chr1.g1.consensus;Parent=evm.chr1.g1;support=consensus;score=1234.5;score_ratio=10.0;coding_length=99;low_support=false;partial5=false;partial3=false
+chr1\tcombinr\texon\t100\t198\t.\t+\t.\tID=evm.chr1.g1.consensus.exon1;Parent=evm.chr1.g1.consensus
+chr1\tcombinr\tCDS\t100\t198\t.\t+\t0\tID=evm.chr1.g1.consensus.cds1;Parent=evm.chr1.g1.consensus
+chr1\tcombinr\tmRNA\t60\t260\t.\t+\t.\tID=evm.chr1.g1.iso1;Parent=evm.chr1.g1;support=transcript_isoform;coding_altered=false;sources=transcript_alignments.gff3;contains=t1,t2
+chr1\tcombinr\tfive_prime_UTR\t60\t99\t.\t+\t.\tID=evm.chr1.g1.iso1.utr5;Parent=evm.chr1.g1.iso1
+chr1\tcombinr\texon\t60\t260\t.\t+\t.\tID=evm.chr1.g1.iso1.exon1;Parent=evm.chr1.g1.iso1
+chr1\tcombinr\tCDS\t100\t198\t.\t+\t0\tID=evm.chr1.g1.iso1.cds1;Parent=evm.chr1.g1.iso1
+chr1\tcombinr\tthree_prime_UTR\t199\t260\t.\t+\t.\tID=evm.chr1.g1.iso1.utr3;Parent=evm.chr1.g1.iso1
+"""
+
+
+def _feature_spans(path: Path) -> tuple[dict, dict, dict]:
+    """Return (mRNA->gene, mRNA->exon spans, mRNA->CDS spans) from a GFF3."""
+    parent, exons, cds = {}, {}, {}
+    for ln in path.read_text().splitlines():
+        if ln.startswith("#") or not ln.strip():
+            continue
+        c = ln.split("\t")
+        a = dict(p.split("=", 1) for p in c[8].split(";") if "=" in p)
+        if c[2] == "mRNA":
+            parent[a["ID"]] = a.get("Parent")
+        elif c[2] == "exon":
+            exons.setdefault(a.get("Parent"), []).append((int(c[3]), int(c[4])))
+        elif c[2] == "CDS":
+            cds.setdefault(a.get("Parent"), []).append((int(c[3]), int(c[4])))
+    return parent, exons, cds
+
+
+def test_combinr_handoff_preserves_isoforms_and_implicit_utr(tmp_path, monkeypatch):
+    """The prettify tail must keep multi-isoform genes and retain UTR as exon
+    overhang beyond CDS (combinr's explicit UTR features collapse into exons,
+    the canonical NCBI representation)."""
+    def fake(config, sdir, evidence, *, transcripts=None):
+        (config.work_dir / "evm_consensus_models" / "consensus_models.gff3").write_text(
+            _COMBINR_ALTSPLICE_GFF
+        )
+        return sdir / "consensus_models.gff3"
+
+    monkeypatch.setattr(cons, "run_combinr_consensus", fake)
+    cfg = _config(tmp_path, consensus_engine="combinr")
+    ev = tmp_path / "prot.gff3"
+    ev.touch()
+
+    final = cons.build_consensus_models(cfg, ev, transcripts=None)
+
+    parent, exons, cds = _feature_spans(final)
+    # one gene, two isoforms preserved
+    assert len(parent) == 2
+    assert len(set(parent.values())) == 1
+    # at least one isoform keeps exon extent beyond its CDS (implicit UTR)
+    overhang = [
+        m for m in cds
+        if m in exons and (
+            min(s for s, _ in exons[m]) < min(s for s, _ in cds[m])
+            or max(e for _, e in exons[m]) > max(e for _, e in cds[m])
+        )
+    ]
+    assert overhang, "UTR lost: no mRNA has exons extending past its CDS"
+    # combinr's isoform provenance attribute survives prettification
+    assert "contains=" in final.read_text()
+
+
+@pytest.mark.skipif(_COMBINR is None, reason="combinr binary not found (set COMBINR_BIN or add to PATH)")
+def test_combinr_consensus_end_to_end(tmp_path):
+    """Real combinr binary through build_consensus_models on minimal inputs.
+
+    A transcript wider than the predicted CDS must yield an isoform with UTR;
+    asserts the staged + converted evidence drives combinr to a valid final
+    GFF3 (the path EVM/CI cannot exercise without the Rust binary)."""
+    seq = list("A" * 600)
+    orf = "ATG" + "AAG" * 31 + "TAA"  # clean ORF, no internal in-frame stop
+    for i, ch in enumerate(orf):
+        seq[99 + i] = ch
+    (tmp_path / "genome.fa").write_text(">chr1\n" + "".join(seq) + "\n")
+    (tmp_path / "proteins.faa").write_text(">p\nMK\n")
+    (tmp_path / "augustus.gff3").write_text(
+        "##gff-version 3\n"
+        "chr1\taugustus\tgene\t100\t198\t.\t+\t.\tID=g1\n"
+        "chr1\taugustus\tmRNA\t100\t198\t.\t+\t.\tID=m1;Parent=g1\n"
+        "chr1\taugustus\texon\t100\t198\t.\t+\t.\tID=e1;Parent=m1\n"
+        "chr1\taugustus\tCDS\t100\t198\t.\t+\t0\tID=c1;Parent=m1\n"
+    )
+    (tmp_path / "prot.gff3").write_text(
+        "##gff-version 3\n"
+        "chr1\tprot_align\tmRNA\t100\t198\t.\t+\t.\tID=pm1;Parent=pg1\n"
+        "chr1\tprot_align\tCDS\t100\t198\t.\t+\t0\tID=pc1;Parent=pm1\n"
+    )
+    nr = tmp_path / "nr_transcripts.gff3"
+    nr.write_text(
+        "##gff-version 3\n"
+        "chr1\tcombinr-assembly\texon\t60\t260\t.\t+\t.\tID=t1:exon:1;Parent=t1\n"
+    )
+    (tmp_path / "nr_transcripts.fasta").write_text(">t1\nACGT\n")
+    (tmp_path / "hints.gff").write_text("")
+
+    cfg = PipelineConfig(
+        genome=tmp_path / "genome.fa", proteins=[tmp_path / "proteins.faa"],
+        work_dir=tmp_path, num_cpu=2, consensus_engine="combinr", combinr_path=_COMBINR,
+        transcripts_fasta=tmp_path / "nr_transcripts.fasta", transcripts_gff=nr,
+        rnaseq_hints=tmp_path / "hints.gff",
+    )
+
+    final = cons.build_consensus_models(cfg, tmp_path / "prot.gff3", tmp_path / "augustus.gff3", transcripts=nr)
+
+    assert final.exists()
+    types = Counter(
+        ln.split("\t")[2]
+        for ln in final.read_text().splitlines()
+        if ln.strip() and not ln.startswith("#")
+    )
+    assert types["gene"] >= 1 and types["CDS"] >= 1 and types["exon"] >= 1
+    # the wider transcript must have produced an isoform whose exon overhangs CDS
+    _parent, exons, cds = _feature_spans(final)
+    assert any(
+        m in exons and (
+            min(s for s, _ in exons[m]) < min(s for s, _ in cds[m])
+            or max(e for _, e in exons[m]) > max(e for _, e in cds[m])
+        )
+        for m in cds
+    ), "expected a UTR-bearing isoform from the wider transcript"

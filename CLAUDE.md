@@ -16,12 +16,14 @@ poetry install --with dev
 
 # Run tests
 poetry run pytest tests/ -v
+# The combinr-consensus end-to-end test runs the external combinr binary; it
+# auto-skips unless combinr is on PATH or $COMBINR_BIN points at the binary.
 
 # CLI (all subcommands)
 poetry run eukan --help
 poetry run eukan mask-repeats -g genome.fasta
 poetry run eukan annotate -g genome.fasta -p proteins.fasta --kingdom protist
-poetry run eukan assemble -g genome.fasta -l left.fq -r right.fq -A -T -P
+poetry run eukan assemble -g genome.fasta -l left.fq -r right.fq -A -T --run-combinr
 poetry run eukan func-annot -p proteins.faa --gff3 genes.gff3
 poetry run eukan prep-submission -t submission.sbt --organism "Genus species"
 poetry run eukan gff3toseq -g genome.fa -i genes.gff3 --output-format protein -o proteins.faa
