@@ -88,6 +88,14 @@ required_by = ["assemble"]
 conda_package = "segemehl"
 min_version = "0.3.4"
 
+[rnaspades]
+binary = "rnaspades.py"
+version_cmd = ["rnaspades.py", "--version"]
+required_by = ["assemble"]
+# rnaspades.py ships in the bioconda 'spades' package.
+conda_package = "spades"
+min_version = "3.15"
+
 [spaln]
 binary = "spaln"
 version_cmd = ["spaln", "-h"]
@@ -148,6 +156,16 @@ min_version = "2.5"
 # PASAHOME is version-specific; set by the Dockerfile ENV.
 # scripts/ is appended to PATH relative to $PASAHOME.
 env_vars = [{ var = "PASAHOME", add_to_path = ["scripts"] }]
+
+[combinr]
+binary = "combinr"
+version_cmd = ["combinr", "--version"]
+required_by = ["assemble"]
+# Rust tool, not on conda. Build with `cargo build --release` in the combinr
+# repo and put target/release/combinr on PATH (or set the combinr_path config /
+# EUKAN_ASSEMBLE_COMBINR_PATH). Consolidates transcript-to-genome BAMs into
+# non-redundant models (PASA replacement).
+install_hint = "Build combinr (cargo build --release) and put target/release/combinr on PATH, or set EUKAN_ASSEMBLE_COMBINR_PATH."
 
 [blat]
 binary = "blat"

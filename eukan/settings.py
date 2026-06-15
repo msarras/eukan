@@ -315,6 +315,17 @@ class AssemblyConfig(_StepRunSettings):
     splice_permissive: bool = False
     diagnose_softclips: bool = True
 
+    # --- de novo + combinr consolidation routine (replaces PASA) ---
+    rnaspades: bool = True
+    """Run rnaspades de novo assembly alongside Trinity and consolidate via combinr."""
+    min_sl_fragment: int = 25
+    """Minimum length (nt) of a fragment kept after in-silico SL trans-splicing."""
+    sl_sequence: str | None = None
+    """Override the spliced-leader sequence used for depletion (else taken from the
+    soft-clip diagnostic verdict)."""
+    combinr_path: Path | None = None
+    """Explicit path to the combinr binary; resolved from PATH when unset."""
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def name(self) -> str:

@@ -4,6 +4,7 @@
 # Tools requiring manual installation:
 #   - genemark: Requires a license from https://topaz.gatech.edu/GeneMark/license_download.cgi
 #   - fitild: Build from source: git clone https://github.com/ogotoh/fitild && cd fitild/src && ./configure && make
+#   - combinr: Build combinr (cargo build --release) and put target/release/combinr on PATH, or set EUKAN_ASSEMBLE_COMBINR_PATH.
 #
 # Tools bundled with parent packages (no separate install):
 #   - makdbs: bundled with parent package
@@ -58,6 +59,7 @@ dependencies:
   - samtools>=1.20
   - segemehl>=0.3.4
   - snap
+  - spades>=3.15
   - spaln>=3.0
   - star>=2.7
   - table2asn>=1.28
