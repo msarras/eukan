@@ -154,8 +154,8 @@ def test_segemehl_sj_feeds_intron_hints(tmp_path):
 def test_steps_for_selects_aligner():
     star = _steps_for("star")
     seg = _steps_for("segemehl")
-    assert [s.name for s in star] == ["star", "trinity", "pasa"]
-    assert [s.name for s in seg] == ["segemehl", "trinity", "pasa"]
+    assert [s.name for s in star] == ["star", "trinity", "rnaspades", "pasa"]
+    assert [s.name for s in seg] == ["segemehl", "trinity", "rnaspades", "pasa"]
     assert seg[0].output == "segemehl_Aligned.sortedByCoord.out.bam"
 
 
@@ -166,7 +166,7 @@ def test_force_steps_respects_active_aligner():
     ) == ["assembly/segemehl"]
     # --force re-runs the active aligner's whole chain.
     assert force_steps_from_run_flags(aligner="segemehl", force=True) == [
-        "assembly/segemehl", "assembly/trinity", "assembly/pasa",
+        "assembly/segemehl", "assembly/trinity", "assembly/rnaspades", "assembly/pasa",
     ]
 
 

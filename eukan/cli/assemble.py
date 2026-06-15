@@ -65,6 +65,10 @@ from eukan.cli._framework import (
 @optgroup.option("--phred", type=click.Choice(["33", "64"]), default="33", show_default=True, help="Phred quality score.")
 @optgroup.option("--jaccard-clip", "-j", is_flag=True, help="Enable jaccard clipping.")
 @optgroup.option(
+    "--rnaspades/--no-rnaspades", default=True, show_default=True,
+    help="Run rnaSPAdes de novo assembly alongside Trinity (consolidated by combinr).",
+)
+@optgroup.option(
     "--memory-gb", type=int, default=None,
     help="Trinity --max_memory cap in GiB. Defaults to 60 percent of "
          "currently-available memory (floored at 4 GiB).",
@@ -73,6 +77,7 @@ from eukan.cli._framework import (
 @optgroup.option("--run-star", "-A", is_flag=True, help="Force re-run STAR read mapping.")
 @optgroup.option("--run-segemehl", is_flag=True, help="Force re-run segemehl read mapping.")
 @optgroup.option("--run-trinity", "-T", is_flag=True, help="Force re-run Trinity assembly.")
+@optgroup.option("--run-rnaspades", is_flag=True, help="Force re-run rnaSPAdes assembly.")
 @optgroup.option("--run-pasa", "-P", is_flag=True, help="Force re-run PASA alignment.")
 @force_option
 def assemble(
@@ -90,8 +95,10 @@ def assemble(
     run_star: bool,
     run_segemehl: bool,
     run_trinity: bool,
+    run_rnaspades: bool,
     run_pasa: bool,
     jaccard_clip: bool,
+    rnaspades: bool,
     splice_permissive: bool,
     diagnose_softclips: bool,
     code: str,
@@ -139,6 +146,7 @@ def assemble(
         aligner=aligner,
         align_mode=align_mode,
         jaccard_clip=jaccard_clip,
+        rnaspades=rnaspades,
         splice_permissive=splice_permissive,
         diagnose_softclips=diagnose_softclips,
         genetic_code=code,
@@ -152,7 +160,8 @@ def assemble(
     force_steps = force_steps_from_run_flags(
         aligner=aligner,
         run_star=run_star, run_segemehl=run_segemehl,
-        run_trinity=run_trinity, run_pasa=run_pasa, force=force,
+        run_trinity=run_trinity, run_rnaspades=run_rnaspades,
+        run_pasa=run_pasa, force=force,
     )
     run_assembly(config, force_steps=force_steps or None)
     click.echo("Done.")

@@ -105,7 +105,7 @@ class TestAssemblyForceStepsFromRunFlags:
     """
 
     _ALL_KEYS: ClassVar[list[str]] = [
-        "assembly/star", "assembly/trinity", "assembly/pasa",
+        "assembly/star", "assembly/trinity", "assembly/rnaspades", "assembly/pasa",
     ]
 
     def test_no_flags_returns_empty(self):
@@ -125,6 +125,9 @@ class TestAssemblyForceStepsFromRunFlags:
     def test_run_pasa_alone_forces_pasa_only(self):
         assert assembly_force_steps_from_run_flags(run_pasa=True) == ["assembly/pasa"]
 
+    def test_run_rnaspades_alone_forces_rnaspades_only(self):
+        assert assembly_force_steps_from_run_flags(run_rnaspades=True) == ["assembly/rnaspades"]
+
     def test_run_star_with_force_takes_run_flag(self):
         """--run-star --force scopes to star; --run-X takes precedence over --force."""
         assert assembly_force_steps_from_run_flags(run_star=True, force=True) == [
@@ -138,7 +141,7 @@ class TestAssemblyForceStepsFromRunFlags:
     def test_step_order_is_pipeline_order(self):
         """Returned keys follow pipeline order regardless of kwarg order."""
         result = assembly_force_steps_from_run_flags(
-            run_pasa=True, run_trinity=True, run_star=True,
+            run_pasa=True, run_rnaspades=True, run_trinity=True, run_star=True,
         )
         assert result == self._ALL_KEYS
 
