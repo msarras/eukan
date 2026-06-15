@@ -5,6 +5,7 @@ from __future__ import annotations
 from eukan.assembly.pasa import run_pasa
 from eukan.assembly.rnaspades import run_rnaspades
 from eukan.assembly.segemehl import map_reads_segemehl
+from eukan.assembly.sl_depletion import run_sl_depletion
 from eukan.assembly.star import map_reads
 from eukan.assembly.trinity import run_trinity
 from eukan.infra.artifacts import Artifact
@@ -33,11 +34,15 @@ def _aligner_step(aligner: str) -> StepSpec:
 
 
 def _steps_for(aligner: str) -> list[StepSpec]:
-    """Assembly steps for the aligner: <aligner> → trinity → rnaspades → pasa."""
+    """Assembly steps: <aligner> → trinity → rnaspades → sl_deplete → pasa."""
     return [
         _aligner_step(aligner),
         StepSpec("trinity", run_trinity, "trinity-gg.fasta", "-T / --run-trinity"),
         StepSpec("rnaspades", run_rnaspades, "rnaspades.fasta", "--run-rnaspades"),
+        StepSpec(
+            "sl_deplete", run_sl_depletion,
+            "trinity-denovo.sl_depleted.fasta", "--run-sl-deplete",
+        ),
         StepSpec("pasa", run_pasa, Artifact.NR_TRANSCRIPTS_FASTA.value, "-P / --run-pasa"),
     ]
 
@@ -49,6 +54,7 @@ def force_steps_from_run_flags(
     run_segemehl: bool = False,
     run_trinity: bool = False,
     run_rnaspades: bool = False,
+    run_sl_deplete: bool = False,
     run_pasa: bool = False,
     force: bool = False,
 ) -> list[str]:
@@ -61,7 +67,8 @@ def force_steps_from_run_flags(
         ASSEMBLY, _steps_for(aligner),
         force=force,
         run_star=run_star, run_segemehl=run_segemehl,
-        run_trinity=run_trinity, run_rnaspades=run_rnaspades, run_pasa=run_pasa,
+        run_trinity=run_trinity, run_rnaspades=run_rnaspades,
+        run_sl_deplete=run_sl_deplete, run_pasa=run_pasa,
     )
 
 
