@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from eukan.annotation.combinr_consensus import run_combinr_consensus
 from eukan.annotation.evm import run_evm
 from eukan.assembly.pasa import write_pasa_configs
 from eukan.gff import concordance, create_gff_db
@@ -96,29 +97,40 @@ def build_consensus_models(
     """Build final consensus models from all predictions.
 
     Phases:
-      1. EVM merges all evidence into consensus_models.gff3
-      2. (optional) PASA UTR/altsplice update if config.utrs_db is set
-      3. Patch in transcript ORFs that don't overlap any consensus gene
-      4. Recompute CDS phases, assign locus tags, write final.gff3
+      1. Consensus building into consensus_models.gff3, by either:
+         - EVM (default), optionally followed by a PASA UTR/altsplice update
+           when config.utrs_db is set; or
+         - combinr consensus (config.consensus_engine == "combinr"), which
+           folds UTRs/isoforms in itself, so the PASA step is skipped.
+      2. Patch in transcript ORFs that don't overlap any consensus gene
+      3. Recompute CDS phases, assign locus tags, write final.gff3
 
-    ``transcripts`` is the file used as EVM's ``--transcript_alignments``
-    input. It's PASA's ``nr_transcripts.gff3`` when transcripts were
-    assembled, the GeneMark predictions when there's no transcript
-    evidence in the protein-only non-fungus/protist branch, or ``None``.
+    ``transcripts`` is the transcript-alignments evidence. It's the assembled
+    ``nr_transcripts.gff3`` when transcripts were assembled, the GeneMark
+    predictions standing in for EVM in the protein-only non-fungus/protist
+    branch, or ``None``. (combinr ignores the GeneMark stand-in — it gates
+    transcript evidence on ``config.has_transcripts``.)
     """
     sdir = step_dir(config.work_dir, "evm_consensus_models")
     log.info("Building consensus gene models...")
 
-    run_evm(config, list(evidence), transcripts=transcripts)
-    log.info(
-        "EVM: %d gene predictions",
-        count_gff3_features(sdir / "consensus_models.gff3"),
-    )
+    if config.consensus_engine == "combinr":
+        run_combinr_consensus(config, sdir, list(evidence), transcripts=transcripts)
+        log.info(
+            "combinr consensus: %d gene predictions",
+            count_gff3_features(sdir / "consensus_models.gff3"),
+        )
+        consdb = create_gff_db(sdir / "consensus_models.gff3")
+    else:
+        run_evm(config, list(evidence), transcripts=transcripts)
+        log.info(
+            "EVM: %d gene predictions",
+            count_gff3_features(sdir / "consensus_models.gff3"),
+        )
+        if config.utrs_db:
+            add_utrs_from_pasa(config, sdir, config.utrs_db)
+        consdb = create_gff_db(_resolve_consensus_path(sdir))
 
-    if config.utrs_db:
-        add_utrs_from_pasa(config, sdir, config.utrs_db)
-
-    consdb = create_gff_db(_resolve_consensus_path(sdir))
     consdb = _patch_in_unmatched_orfs(
         consdb, config.work_dir / "orf_finder" / "transcript_orfs.gff3",
     )

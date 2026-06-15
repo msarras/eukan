@@ -46,6 +46,12 @@ from eukan.cli._framework import (
     help="Weights for evidence sources: protein, gene predictions, transcripts.",
 )
 @code_option(default=11)
+@optgroup.option(
+    "--consensus-engine", type=click.Choice(["evm", "combinr"], case_sensitive=False),
+    default="evm", show_default=True,
+    help="Consensus model builder: EVM, or combinr consensus (folds in UTRs/isoforms, "
+    "replacing the PASA UTR step).",
+)
 @optgroup.group("Override options")
 @optgroup.option(
     "--transcripts-fasta", "-tf", type=click.Path(exists=True, path_type=Path),
@@ -62,7 +68,12 @@ from eukan.cli._framework import (
 @optgroup.option("--strand-specific", is_flag=True, help="Transcripts are strand-oriented.")
 @optgroup.option(
     "--utrs", type=click.Path(exists=True, path_type=Path),
-    help="PASA SQLite database path for adding UTRs.",
+    help="PASA SQLite database path for adding UTRs (EVM engine only).",
+)
+@optgroup.option(
+    "--combinr-path", type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Path to the combinr binary (default: 'combinr' on PATH). "
+    "Used with --consensus-engine combinr.",
 )
 @optgroup.option(
     "--splice-permissive", is_flag=True, default=False,
@@ -94,6 +105,8 @@ def annotate(
     numcpu: int,
     weights: tuple[int, ...],
     code: int,
+    consensus_engine: str,
+    combinr_path: Path | None,
     utrs: Path | None,
     kingdom: str | None,
     run_genemark: bool,
@@ -126,6 +139,8 @@ def annotate(
         num_cpu=numcpu,
         genetic_code=str(code),
         weights=list(weights),
+        consensus_engine=consensus_engine,
+        combinr_path=resolve_optional_path(combinr_path),
         strand_specific=strand_specific,
         allow_noncanonical_splice=splice_permissive,
         spaln_ssp=spsp,

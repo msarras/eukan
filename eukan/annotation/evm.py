@@ -81,6 +81,19 @@ def _first_source_token(gff3: Path) -> str | None:
     return None
 
 
+# Evidence basename -> (weights class, GFF source token). Single source of
+# truth for how a staged evidence file maps to its weights.txt entry; shared
+# with the combinr-consensus engine so both score identical evidence. PROTEIN
+# uses weights[0], ABINITIO_PREDICTION uses weights[1] (see callers).
+EVIDENCE_ROLES: dict[str, tuple[str, str]] = {
+    "prot.gff3":         ("PROTEIN",             "prot_align"),
+    "augustus.gff3":     ("ABINITIO_PREDICTION", "augustus"),
+    "snap.gff3":         ("ABINITIO_PREDICTION", "snap"),
+    "genemark.gff3":     ("ABINITIO_PREDICTION", "genemark"),
+    "codingquarry.gff3": ("ABINITIO_PREDICTION", "codingquarry"),
+}
+
+
 def _stage_evm_inputs(
     sdir: Path,
     evidence: list[Path],
@@ -95,21 +108,16 @@ def _stage_evm_inputs(
     separately as ``nr_transcripts.gff3``; its TRANSCRIPT weights entry uses
     the source token actually present in the file so EVM matches it.
     """
-    ab_initio_weights = {
-        "prot.gff3":         ["PROTEIN",             "prot_align",   weights[0]],
-        "augustus.gff3":     ["ABINITIO_PREDICTION", "augustus",     weights[1]],
-        "snap.gff3":         ["ABINITIO_PREDICTION", "snap",         weights[1]],
-        "genemark.gff3":     ["ABINITIO_PREDICTION", "genemark",     weights[1]],
-        "codingquarry.gff3": ["ABINITIO_PREDICTION", "codingquarry", weights[1]],
-    }
-
     with open(sdir / "weights.txt", "w") as wf, \
          open(sdir / "gene_predictions.gff3", "wb") as pf:
         for ev in evidence:
             ev_name = ev.name
             symlink(ev, sdir / ev_name)
-            if ev_name in ab_initio_weights:
-                wf.write("\t".join(ab_initio_weights[ev_name]) + "\n")
+            role = EVIDENCE_ROLES.get(ev_name)
+            if role is not None:
+                cls, token = role
+                weight = weights[0] if cls == "PROTEIN" else weights[1]
+                wf.write("\t".join([cls, token, weight]) + "\n")
             if ev_name != "prot.gff3":
                 with open(ev, "rb") as ef:
                     shutil.copyfileobj(ef, pf)

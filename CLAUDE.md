@@ -100,8 +100,9 @@ eukan/
 │   ├── augustus.py     # AUGUSTUS training and prediction
 │   ├── training.py     # Training-set construction shared across predictors
 │   ├── snap.py         # SNAP and CodingQuarry gene prediction
-│   ├── evm.py          # EVidenceModeler consensus building
-│   └── consensus.py    # Final model building: EVM + PASA UTRs + prettification
+│   ├── evm.py          # EVidenceModeler consensus building (default engine)
+│   ├── combinr_consensus.py # Alt. consensus engine: external `combinr consensus` (EVM + PASA UTRs in one)
+│   └── consensus.py    # Final model building: EVM-or-combinr dispatch + prettification
 │
 ├── assembly/           # Transcriptome assembly pipeline
 │   ├── pipeline.py     # run_assembly() dispatch (StepSpec-driven)
@@ -144,8 +145,10 @@ eukan/
    - `--spsp`: species-specific parameters via `make_eij.pl`/`make_ssp.pl` → spaln `-T` (experimental, uses separate `prot_align_ssp/` step dir)
 4. AUGUSTUS training and prediction using protein + RNA-seq hints — auto-allows non-canonical splice sites from STAR evidence (`splice_site_summary.json`); `--splice-permissive` lowers thresholds
 5. SNAP training and prediction (fungus/protist also runs CodingQuarry)
-6. Consensus model building via EVM, weighted by evidence type
-7. Optional UTR addition via PASA
+6. Consensus model building, weighted by evidence type, via one of two engines (`--consensus-engine`):
+   - `evm` (default): EVidenceModeler, optionally followed by UTR addition via PASA (`--utrs`)
+   - `combinr`: external `combinr consensus` (EVM-style weighted DP), genetic-code aware, which folds UTRs and alternative isoforms in from transcript evidence (`--alt-splice`) — replacing the separate PASA UTR step. Protein (`prot.gff3`, CDS-format) and transcript (`nr_transcripts.gff3`, flat exon) evidence are converted to `Target=` match chains; ab initio predictions and the weights file are reused as-is. Binary resolved via `--combinr-path` or PATH.
+7. (EVM engine only) Optional UTR addition via PASA
 8. Final GFF3 formatting with locus tags
 9. Optional functional annotation via `func-annot` (UniProt-or-KOfam plus Pfam, selected by `--homology-db`) → `final.mod.gff3`. KOfam mode is an adaptation of KofamKOALA: per-KO bit-score thresholds from `ko_list`, full vs domain score selection per KO, EC numbers parsed out of `[EC:…]` tags into a dedicated `ec_number=` GFF3 attribute, KEGG accessions emitted as `Dbxref=KEGG:K…`
 10. Optional `prep-submission` runs NCBI's table2asn validator over `final.mod.gff3` to produce a `.sqn` plus `.val/.dr/.stats` reports for iterative GFF3 refinement

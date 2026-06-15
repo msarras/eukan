@@ -162,6 +162,11 @@ class PipelineConfig(_StepRunSettings):
     weights: list[int] = Field(default_factory=lambda: [2, 1, 3])
     spaln_ssp: bool = False
     allow_noncanonical_splice: bool = False
+    consensus_engine: Literal["evm", "combinr"] = "evm"
+    """Consensus model builder: EVM (default) or the external combinr consensus
+    engine (folds in UTRs/isoforms, replacing the PASA UTR step)."""
+    combinr_path: Path | None = None
+    """Explicit path to the combinr binary; resolved from PATH when unset."""
 
     # --- Optional transcript evidence (auto-discovered from work_dir if not set) ---
     transcripts_fasta: Path | None = None
