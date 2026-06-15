@@ -83,7 +83,10 @@ from eukan.cli._framework import (
     "--run-map-transcripts", is_flag=True,
     help="Force re-run segemehl transcript→genome mapping.",
 )
-@optgroup.option("--run-pasa", "-P", is_flag=True, help="Force re-run PASA alignment.")
+@optgroup.option(
+    "--run-combinr", is_flag=True,
+    help="Force re-run combinr transcript consolidation.",
+)
 @force_option
 def assemble(
     genome: Path,
@@ -103,7 +106,7 @@ def assemble(
     run_rnaspades: bool,
     run_sl_deplete: bool,
     run_map_transcripts: bool,
-    run_pasa: bool,
+    run_combinr: bool,
     jaccard_clip: bool,
     rnaspades: bool,
     splice_permissive: bool,
@@ -169,7 +172,7 @@ def assemble(
         run_star=run_star, run_segemehl=run_segemehl,
         run_trinity=run_trinity, run_rnaspades=run_rnaspades,
         run_sl_deplete=run_sl_deplete, run_map_transcripts=run_map_transcripts,
-        run_pasa=run_pasa, force=force,
+        run_combinr=run_combinr, force=force,
     )
     run_assembly(config, force_steps=force_steps or None)
     click.echo("Done.")

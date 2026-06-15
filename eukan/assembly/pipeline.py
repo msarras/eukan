@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from eukan.assembly.pasa import run_pasa
+from eukan.assembly.combinr import run_combinr
 from eukan.assembly.rnaspades import run_rnaspades
 from eukan.assembly.segemehl import map_reads_segemehl, map_transcripts_segemehl
 from eukan.assembly.sl_depletion import run_sl_depletion
@@ -35,7 +35,7 @@ def _aligner_step(aligner: str) -> StepSpec:
 
 def _steps_for(aligner: str) -> list[StepSpec]:
     """Assembly steps: <aligner> → trinity → rnaspades → sl_deplete →
-    map_transcripts → pasa."""
+    map_transcripts → combinr."""
     return [
         _aligner_step(aligner),
         StepSpec("trinity", run_trinity, "trinity-gg.fasta", "-T / --run-trinity"),
@@ -48,7 +48,10 @@ def _steps_for(aligner: str) -> list[StepSpec]:
             "map_transcripts", map_transcripts_segemehl,
             "trinity-gg.genome.bam", "--run-map-transcripts",
         ),
-        StepSpec("pasa", run_pasa, Artifact.NR_TRANSCRIPTS_FASTA.value, "-P / --run-pasa"),
+        StepSpec(
+            "combinr", run_combinr,
+            Artifact.NR_TRANSCRIPTS_FASTA.value, "--run-combinr",
+        ),
     ]
 
 
@@ -61,7 +64,7 @@ def force_steps_from_run_flags(
     run_rnaspades: bool = False,
     run_sl_deplete: bool = False,
     run_map_transcripts: bool = False,
-    run_pasa: bool = False,
+    run_combinr: bool = False,
     force: bool = False,
 ) -> list[str]:
     """Translate ``--run-X`` / ``--force`` flags into manifest keys to force.
@@ -75,7 +78,7 @@ def force_steps_from_run_flags(
         run_star=run_star, run_segemehl=run_segemehl,
         run_trinity=run_trinity, run_rnaspades=run_rnaspades,
         run_sl_deplete=run_sl_deplete, run_map_transcripts=run_map_transcripts,
-        run_pasa=run_pasa,
+        run_combinr=run_combinr,
     )
 
 

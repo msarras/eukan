@@ -106,7 +106,7 @@ class TestAssemblyForceStepsFromRunFlags:
 
     _ALL_KEYS: ClassVar[list[str]] = [
         "assembly/star", "assembly/trinity", "assembly/rnaspades",
-        "assembly/sl_deplete", "assembly/map_transcripts", "assembly/pasa",
+        "assembly/sl_deplete", "assembly/map_transcripts", "assembly/combinr",
     ]
 
     def test_no_flags_returns_empty(self):
@@ -123,8 +123,8 @@ class TestAssemblyForceStepsFromRunFlags:
     def test_run_trinity_alone_forces_trinity_only(self):
         assert assembly_force_steps_from_run_flags(run_trinity=True) == ["assembly/trinity"]
 
-    def test_run_pasa_alone_forces_pasa_only(self):
-        assert assembly_force_steps_from_run_flags(run_pasa=True) == ["assembly/pasa"]
+    def test_run_combinr_alone_forces_combinr_only(self):
+        assert assembly_force_steps_from_run_flags(run_combinr=True) == ["assembly/combinr"]
 
     def test_run_rnaspades_alone_forces_rnaspades_only(self):
         assert assembly_force_steps_from_run_flags(run_rnaspades=True) == ["assembly/rnaspades"]
@@ -136,19 +136,19 @@ class TestAssemblyForceStepsFromRunFlags:
         ]
 
     def test_multiple_run_flags(self):
-        result = assembly_force_steps_from_run_flags(run_star=True, run_pasa=True)
-        assert result == ["assembly/star", "assembly/pasa"]
+        result = assembly_force_steps_from_run_flags(run_star=True, run_combinr=True)
+        assert result == ["assembly/star", "assembly/combinr"]
 
     def test_step_order_is_pipeline_order(self):
         """Returned keys follow pipeline order regardless of kwarg order."""
         result = assembly_force_steps_from_run_flags(
-            run_pasa=True, run_map_transcripts=True, run_sl_deplete=True,
+            run_combinr=True, run_map_transcripts=True, run_sl_deplete=True,
             run_rnaspades=True, run_trinity=True, run_star=True,
         )
         assert result == self._ALL_KEYS
 
     def test_returned_keys_are_prefixed(self):
-        result = assembly_force_steps_from_run_flags(run_star=True, run_pasa=True)
+        result = assembly_force_steps_from_run_flags(run_star=True, run_combinr=True)
         assert all(k.startswith("assembly/") for k in result)
 
 
