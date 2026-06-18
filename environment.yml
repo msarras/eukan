@@ -58,10 +58,8 @@ dependencies:
   - gsl
   - liblbfgs
 
-  # Perl (needed by AUGUSTUS, PASA, EVM, GeneMark helper scripts)
+  # Perl (needed by AUGUSTUS and GeneMark helper scripts)
   - perl
-  - perl-bioperl
-  - perl-dbd-sqlite
   - perl-yaml
   - perl-hash-merge
   - perl-mce
