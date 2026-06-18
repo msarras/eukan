@@ -40,7 +40,7 @@ log = get_logger(__name__)
 # Ref-consuming CIGAR ops that stay within one exon block (N splits exons).
 _EXON_REF = frozenset([_CIGAR_M, _CIGAR_D, _CIGAR_EQ, _CIGAR_X])
 
-_DENOVO_BAMS = ("trinity-denovo.genome.bam", "rnaspades.genome.bam")
+_DENOVO_BAMS = ("rnaspades.genome.bam",)
 _GENOME_BAM_SUFFIX = ".genome.bam"
 
 

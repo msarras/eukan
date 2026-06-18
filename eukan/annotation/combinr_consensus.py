@@ -1,11 +1,10 @@
 """Consensus gene models via the external ``combinr consensus`` engine.
 
-An opt-in alternative to EVidenceModeler (selected by
-``config.consensus_engine == "combinr"``). ``combinr consensus`` integrates the
-same weighted evidence EVM does — ab initio predictions, protein alignments, and
-transcript alignments — into one best-scoring coding model per locus, but it also
-folds UTRs and alternative isoforms in from the transcript evidence (via
-``--alt-splice``), so on this path it replaces both EVM *and* the PASA UTR step.
+The consensus engine. ``combinr consensus`` integrates weighted evidence — ab
+initio predictions, protein alignments, and transcript alignments — into one
+best-scoring coding model per locus, and folds UTRs and alternative isoforms in
+from the transcript evidence (via ``--alt-splice``), covering what EVM plus the
+separate PASA UTR step used to do together.
 
 The evidence is staged into the same ``evm_consensus_models`` step dir as EVM and
 written to ``consensus_models.gff3``, so the shared tail in
@@ -29,7 +28,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from eukan.annotation.evm import EVIDENCE_ROLES, _first_source_token
+from eukan.annotation.evidence import EVIDENCE_ROLES, _first_source_token
 from eukan.infra.logging import get_logger
 from eukan.infra.runner import run_cmd
 from eukan.settings import PipelineConfig
@@ -107,7 +106,7 @@ def _stage_combinr_inputs(
     """Stage gene_predictions.gff3, prot.match.gff3, transcripts.match.gff3, weights.txt.
 
     Mirrors EVM's staging (same ab initio concatenation, same weight tokens via
-    the shared :data:`~eukan.annotation.evm.EVIDENCE_ROLES`) so the two engines
+    the shared :data:`~eukan.annotation.evidence.EVIDENCE_ROLES`) so the engine
     score identical evidence. The protein and transcript files are converted to
     ``Target=`` match chains rather than symlinked. Returns ``True`` when
     transcript evidence was staged.

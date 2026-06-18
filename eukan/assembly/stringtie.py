@@ -22,8 +22,8 @@ _GTF = "stringtie.gtf"
 def run_stringtie(config: AssemblyConfig) -> None:
     """Genome-guided assembly off the aligner BAM → ``stringtie.gtf``.
 
-    Skips when ``stringtie.gtf`` already exists (mirrors the Trinity/rnaSPAdes
-    idempotence guards). The coordinate-sorted aligner BAM is read directly; no
+    Skips when ``stringtie.gtf`` already exists (mirrors the rnaSPAdes
+    idempotence guard). The coordinate-sorted aligner BAM is read directly; no
     BAM index is required by StringTie.
     """
     wd = config.work_dir

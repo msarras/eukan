@@ -66,7 +66,7 @@ from eukan.cli._framework import (
 @optgroup.option("--jaccard-clip", "-j", is_flag=True, help="Enable jaccard clipping.")
 @optgroup.option(
     "--rnaspades/--no-rnaspades", default=True, show_default=True,
-    help="Run rnaSPAdes de novo assembly alongside Trinity (consolidated by combinr).",
+    help="Run rnaSPAdes de novo assembly (the de novo source; consolidated by combinr).",
 )
 @optgroup.option(
     "--sl-sequence", default=None,
@@ -84,13 +84,12 @@ from eukan.cli._framework import (
 )
 @optgroup.option(
     "--memory-gb", type=int, default=None,
-    help="Trinity --max_memory cap in GiB. Defaults to 60 percent of "
+    help="rnaSPAdes -m memory cap in GiB. Defaults to 60 percent of "
          "currently-available memory (floored at 4 GiB).",
 )
 @optgroup.group("Re-run steps")
 @optgroup.option("--run-star", "-A", is_flag=True, help="Force re-run STAR read mapping.")
 @optgroup.option("--run-segemehl", is_flag=True, help="Force re-run segemehl read mapping.")
-@optgroup.option("--run-trinity", "-T", is_flag=True, help="Force re-run de novo Trinity assembly.")
 @optgroup.option("--run-stringtie", is_flag=True, help="Force re-run StringTie genome-guided assembly.")
 @optgroup.option("--run-rnaspades", is_flag=True, help="Force re-run rnaSPAdes assembly.")
 @optgroup.option(
@@ -99,7 +98,7 @@ from eukan.cli._framework import (
 )
 @optgroup.option(
     "--run-map-transcripts", is_flag=True,
-    help="Force re-run segemehl transcript→genome mapping.",
+    help="Force re-run STAR transcript→genome mapping.",
 )
 @optgroup.option(
     "--run-sl-detect", is_flag=True,
@@ -128,7 +127,6 @@ def assemble(
     align_mode: str,
     run_star: bool,
     run_segemehl: bool,
-    run_trinity: bool,
     run_stringtie: bool,
     run_rnaspades: bool,
     run_jaccard: bool,
@@ -205,7 +203,7 @@ def assemble(
     force_steps = force_steps_from_run_flags(
         aligner=aligner,
         run_star=run_star, run_segemehl=run_segemehl,
-        run_trinity=run_trinity, run_stringtie=run_stringtie,
+        run_stringtie=run_stringtie,
         run_rnaspades=run_rnaspades, run_jaccard=run_jaccard,
         run_map_transcripts=run_map_transcripts,
         run_sl_detect=run_sl_detect, run_sl_cut=run_sl_cut,

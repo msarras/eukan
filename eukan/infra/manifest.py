@@ -221,7 +221,7 @@ def get_or_create_manifest(work_dir: Path, config: Any = None) -> RunManifest:
 # ---------------------------------------------------------------------------
 
 
-_CONDA_TOOLS = ["samtools", "augustus", "star", "hmmer", "spaln", "snap", "trinity"]
+_CONDA_TOOLS = ["samtools", "augustus", "star", "hmmer", "spaln", "snap"]
 
 
 def _tool_versions_cache_path() -> Path:

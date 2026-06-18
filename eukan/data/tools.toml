@@ -86,7 +86,7 @@ binary = "stringtie"
 version_cmd = ["stringtie", "--version"]
 required_by = ["assemble"]
 conda_package = "stringtie"
-min_version = "2.2"
+min_version = "3.0"
 
 [segemehl]
 binary = "segemehl.x"
@@ -101,7 +101,7 @@ version_cmd = ["rnaspades.py", "--version"]
 required_by = ["assemble"]
 # rnaspades.py ships in the bioconda 'spades' package.
 conda_package = "spades"
-min_version = "3.15"
+min_version = "4.2"
 
 [spaln]
 binary = "spaln"
@@ -129,69 +129,16 @@ install_hint = "Build from source: git clone https://github.com/ogotoh/fitild &&
 conda_path_dirs = ["opt/fitild/src"]
 conda_lib_dirs = ["lib"]
 
-[evidencemodeler]
-binary = "partition_EVM_inputs.pl"
-version_cmd = ["partition_EVM_inputs.pl"]
-required_by = ["annotate"]
-conda_package = "evidencemodeler"
-min_version = "2.1"
-# EVM_HOME points at a versioned directory; set by the Dockerfile ENV.
-env_vars = [{ var = "EVM_HOME" }]
-conda_path_dirs = ["bin/EvmUtils", "bin/EvmUtils/misc"]
-
-[cdbfasta]
-binary = "cdbfasta"
-version_cmd = ["cdbfasta", "-v"]
-required_by = ["annotate"]
-# bundled with PASA
-
-[trinity]
-binary = "Trinity"
-version_cmd = ["Trinity", "--version"]
-required_by = ["assemble"]
-conda_package = "trinity"
-min_version = "2.15"
-# TRINITY_HOME is version-specific; set by the Dockerfile ENV.
-env_vars = [{ var = "TRINITY_HOME" }]
-
-[pasa]
-binary = "Launch_PASA_pipeline.pl"
-version_cmd = ["Launch_PASA_pipeline.pl", "--version"]
-required_by = ["annotate", "assemble"]
-conda_package = "pasa"
-min_version = "2.5"
-# PASAHOME is version-specific; set by the Dockerfile ENV.
-# scripts/ is appended to PATH relative to $PASAHOME.
-env_vars = [{ var = "PASAHOME", add_to_path = ["scripts"] }]
-
 [combinr]
 binary = "combinr"
 version_cmd = ["combinr", "--version"]
-required_by = ["assemble"]
+required_by = ["assemble", "annotate"]
 # Rust tool, not on conda. Build with `cargo build --release` in the combinr
 # repo and put target/release/combinr on PATH (or set the combinr_path config /
 # EUKAN_ASSEMBLE_COMBINR_PATH). Consolidates transcript-to-genome BAMs into
-# non-redundant models (PASA replacement).
+# non-redundant models (assemble) and builds weighted consensus gene models
+# (annotate) — replaces both PASA and EVidenceModeler.
 install_hint = "Build combinr (cargo build --release) and put target/release/combinr on PATH, or set EUKAN_ASSEMBLE_COMBINR_PATH."
-
-[blat]
-binary = "blat"
-version_cmd = ["blat"]
-required_by = ["assemble"]
-conda_package = "ucsc-blat"
-
-[gmap]
-binary = "gmap"
-version_cmd = ["gmap", "--version"]
-required_by = ["assemble"]
-conda_package = "gmap"
-min_version = "2024"
-
-[seqclean]
-binary = "seqclean"
-version_cmd = ["seqclean", "-h"]
-required_by = ["assemble"]
-# bundled with PASA
 
 [genomethreader]
 binary = "gth"
@@ -199,20 +146,6 @@ version_cmd = ["gth", "-version"]
 required_by = ["annotate"]
 conda_package = "genomethreader"
 min_version = "1.7"
-
-[jellyfish]
-binary = "jellyfish"
-version_cmd = ["jellyfish", "--version"]
-required_by = ["assemble"]
-# jellyfish is a Trinity dependency — Trinity's conda package pulls it in.
-# Don't pin a conda_package here to avoid conflicts with the unrelated
-# Python 'jellyfish' package on defaults channel.
-
-[fasta3]
-binary = "fasta36"
-version_cmd = ["fasta36"]
-required_by = ["assemble"]
-conda_package = "fasta3"
 
 [trf]
 binary = "trf"
@@ -351,36 +284,6 @@ binary = "gthconsensus"
 version_cmd = ["gthconsensus", "-version"]
 required_by = ["annotate"]
 # bundled with GenomeThreader
-
-[write_EVM_commands]
-binary = "write_EVM_commands.pl"
-version_cmd = ["write_EVM_commands.pl"]
-required_by = ["annotate"]
-# bundled with EVidenceModeler
-
-[recombine_EVM_partial_outputs]
-binary = "recombine_EVM_partial_outputs.pl"
-version_cmd = ["recombine_EVM_partial_outputs.pl"]
-required_by = ["annotate"]
-# bundled with EVidenceModeler
-
-[convert_EVM_outputs_to_GFF3]
-binary = "convert_EVM_outputs_to_GFF3.pl"
-version_cmd = ["convert_EVM_outputs_to_GFF3.pl"]
-required_by = ["annotate"]
-# bundled with EVidenceModeler
-
-[load_current_gene_annotations]
-binary = "Load_Current_Gene_Annotations.dbi"
-version_cmd = ["Load_Current_Gene_Annotations.dbi"]
-required_by = ["annotate"]
-# bundled with PASA (under $PASAHOME/scripts/, added to PATH via add_to_path)
-
-[build_comprehensive_transcriptome]
-binary = "build_comprehensive_transcriptome.dbi"
-version_cmd = ["build_comprehensive_transcriptome.dbi"]
-required_by = ["assemble"]
-# bundled with PASA (under $PASAHOME/scripts/, added to PATH via add_to_path)
 
 [table2asn]
 binary = "table2asn"

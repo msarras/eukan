@@ -162,9 +162,6 @@ class PipelineConfig(_StepRunSettings):
     weights: list[int] = Field(default_factory=lambda: [2, 1, 3])
     spaln_ssp: bool = False
     allow_noncanonical_splice: bool = False
-    consensus_engine: Literal["evm", "combinr"] = "evm"
-    """Consensus model builder: EVM (default) or the external combinr consensus
-    engine (folds in UTRs/isoforms, replacing the PASA UTR step)."""
     combinr_path: Path | None = None
     """Explicit path to the combinr binary; resolved from PATH when unset."""
 
@@ -173,7 +170,6 @@ class PipelineConfig(_StepRunSettings):
     transcripts_gff: Path | None = None
     rnaseq_hints: Path | None = None
     strand_specific: bool = False
-    utrs_db: Path | None = None
 
     # Well-known assembly output filenames — sourced from the cross-pipeline
     # artifact registry so renaming an artifact only edits one file.
@@ -271,15 +267,13 @@ class PipelineConfig(_StepRunSettings):
 # ---------------------------------------------------------------------------
 
 
-def _default_trinity_memory_gb(meminfo_path: str = "/proc/meminfo") -> int:
-    """Safe default for Trinity ``--max_memory``, in GiB.
+def _default_assembly_memory_gb(meminfo_path: str = "/proc/meminfo") -> int:
+    """Safe default for the de novo assembler's memory cap, in GiB.
 
-    Trinity (Jellyfish in genome-guided mode, Inchworm in de novo) reliably
-    overshoots its ``--max_memory`` soft cap during k-mer counting. We size
-    the cap from ``MemAvailable`` (the kernel's estimate of memory free for
-    new processes) rather than ``MemTotal``, so the cap reflects what the
-    machine can actually spare. Falls back to half of ``MemTotal``, then to
-    4 GiB. Always at least 4 GiB — Trinity needs that much to run at all.
+    rnaSPAdes sizes its ``-m`` budget from this. We derive it from
+    ``MemAvailable`` (the kernel's estimate of memory free for new processes)
+    rather than ``MemTotal``, so the cap reflects what the machine can actually
+    spare. Falls back to half of ``MemTotal``, then to a 4 GiB floor.
     """
     try:
         avail_kb = total_kb = 0
@@ -322,7 +316,7 @@ class AssemblyConfig(_StepRunSettings):
 
     # --- de novo + combinr consolidation routine (replaces PASA) ---
     rnaspades: bool = True
-    """Run rnaspades de novo assembly alongside Trinity and consolidate via combinr."""
+    """Run rnaSPAdes de novo assembly (the de novo source; consolidated via combinr)."""
     min_sl_fragment: int = 25
     """Minimum length (nt) of a fragment kept after in-silico SL trans-splicing."""
     sl_sequence: str | None = None
@@ -368,18 +362,9 @@ class AssemblyConfig(_StepRunSettings):
             return ["-q", str(self.single_reads)]
         raise ValueError("No read files provided")
 
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def reads_args_trinity(self) -> list[str]:
-        if self.left_reads and self.right_reads:
-            return ["--left", str(self.left_reads), "--right", str(self.right_reads)]
-        elif self.single_reads:
-            return ["--single", str(self.single_reads)]
-        raise ValueError("No read files provided")
-
     memory_gb: int = Field(
-        default_factory=lambda: _default_trinity_memory_gb(),
-        description="Trinity --max_memory cap in GiB.",
+        default_factory=lambda: _default_assembly_memory_gb(),
+        description="rnaSPAdes -m memory cap in GiB.",
     )
 
     settings_customise_sources = _pyproject_settings_sources("assemble")

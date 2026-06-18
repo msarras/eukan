@@ -58,7 +58,7 @@ _CONSENSUS_LEN = 16
 _MIN_DENOVO_SUPPORT = 3
 
 # De novo transcript→genome BAMs scanned for Source B (clips + insertions).
-_DENOVO_BAMS = ("trinity-denovo.genome.bam", "rnaspades.genome.bam")
+_DENOVO_BAMS = ("rnaspades.genome.bam",)
 _GENOME_BAM_SUFFIX = ".genome.bam"
 
 

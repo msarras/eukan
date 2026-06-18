@@ -36,11 +36,10 @@ log = get_logger(__name__)
 # SL-cut transcript models from the sl_cut step (genome coordinates).
 _CUT_MODELS = (
     "stringtie.sl_cut.gff3",
-    "trinity-denovo.genome.sl_cut.gff3",
     "rnaspades.genome.sl_cut.gff3",
 )
 # Source token written into nr_transcripts.gff3; EVM's weights.txt picks this up
-# as the TRANSCRIPT evidence source (eukan/annotation/evm.py::_first_source_token).
+# as the TRANSCRIPT evidence source (eukan/annotation/evidence.py::_first_source_token).
 _SOURCE = "combinr-assembly"
 
 

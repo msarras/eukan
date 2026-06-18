@@ -1,4 +1,4 @@
-"""Unit tests for eukan.annotation.combinr_consensus (the EVM alternative)."""
+"""Unit tests for eukan.annotation.combinr_consensus (the consensus engine)."""
 
 from __future__ import annotations
 
@@ -289,7 +289,7 @@ def test_combinr_handoff_preserves_isoforms_and_implicit_utr(tmp_path, monkeypat
         return sdir / "consensus_models.gff3"
 
     monkeypatch.setattr(cons, "run_combinr_consensus", fake)
-    cfg = _config(tmp_path, consensus_engine="combinr")
+    cfg = _config(tmp_path)
     ev = tmp_path / "prot.gff3"
     ev.touch()
 
@@ -347,7 +347,7 @@ def test_combinr_consensus_end_to_end(tmp_path):
 
     cfg = PipelineConfig(
         genome=tmp_path / "genome.fa", proteins=[tmp_path / "proteins.faa"],
-        work_dir=tmp_path, num_cpu=2, consensus_engine="combinr", combinr_path=_COMBINR,
+        work_dir=tmp_path, num_cpu=2, combinr_path=_COMBINR,
         transcripts_fasta=tmp_path / "nr_transcripts.fasta", transcripts_gff=nr,
         rnaseq_hints=tmp_path / "hints.gff",
     )

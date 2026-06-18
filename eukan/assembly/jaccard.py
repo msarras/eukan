@@ -6,9 +6,8 @@ independently-transcribed genes into a single contig. Trinity's
 ``--jaccard_clip`` detects these by mapping read pairs back to the assembled
 contigs and cutting where no read-pair fragment *bridges* a position; but it
 only ever clips Trinity's own output. This module applies the same logic
-uniformly to every de novo assembled transcript set (de novo Trinity and
-rnaSPAdes), so the consolidation step (combinr) never sees an un-clipped fused
-contig regardless of which assembler produced it.
+uniformly to the de novo assembled transcripts (rnaSPAdes), so the
+consolidation step (combinr) never sees an un-clipped fused contig.
 
 Algorithm (faithful to Trinity, see ``trinityrnaseq/util/support_scripts/``):
 
@@ -77,7 +76,6 @@ _REPOSITION_HALF_WIN = _TROUGH_WIN // 2  # coverage-reposition search radius (10
 # each into a ``.jaccard.fasta`` sibling that ``star.map_transcripts_star``
 # prefers when present.
 _TRANSCRIPT_FASTAS = (
-    "trinity-denovo.fasta",
     "rnaspades.fasta",
 )
 

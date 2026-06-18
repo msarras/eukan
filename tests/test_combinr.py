@@ -122,7 +122,6 @@ def test_combinr_path_override(tmp_path, monkeypatch):
 
 _CUT_MODELS = (
     "stringtie.sl_cut.gff3",
-    "trinity-denovo.genome.sl_cut.gff3",
     "rnaspades.genome.sl_cut.gff3",
 )
 
@@ -147,7 +146,7 @@ def test_run_combinr_consolidates_cut_models(tmp_path, monkeypatch):
 
     run_combinr(_config(tmp_path))
 
-    # single combinr run over the SL-cut models (StringTie + both de novo)
+    # single combinr run over the SL-cut models (StringTie + de novo)
     assert len(calls) == 1
     assert calls[0] == set(_CUT_MODELS)
     assert (tmp_path / Artifact.NR_TRANSCRIPTS_GFF).exists()
@@ -164,7 +163,7 @@ def test_run_combinr_skips_empty_cut_models(tmp_path, monkeypatch):
 
     run_combinr(_config(tmp_path))
 
-    assert calls[0] == {"stringtie.sl_cut.gff3", "trinity-denovo.genome.sl_cut.gff3"}
+    assert calls[0] == {"stringtie.sl_cut.gff3"}
 
 
 def test_run_combinr_errors_without_inputs(tmp_path, monkeypatch):

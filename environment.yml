@@ -8,9 +8,6 @@
 #
 # Tools bundled with parent packages (no separate install):
 #   - makdbs: bundled with parent package
-#   - cdbfasta: bundled with parent package
-#   - seqclean: bundled with parent package
-#   - jellyfish: bundled with parent package
 #   - BuildDatabase: bundled with parent package
 #   - gff2gbSmallDNA.pl: bundled with parent package
 #   - optimize_augustus.pl: bundled with parent package
@@ -28,11 +25,6 @@
 #   - sortgrcd: bundled with parent package
 #   - makblk.pl: bundled with parent package
 #   - gthconsensus: bundled with parent package
-#   - write_EVM_commands.pl: bundled with parent package
-#   - recombine_EVM_partial_outputs.pl: bundled with parent package
-#   - convert_EVM_outputs_to_GFF3.pl: bundled with parent package
-#   - Load_Current_Gene_Annotations.dbi: bundled with parent package
-#   - build_comprehensive_transcriptome.dbi: bundled with parent package
 
 name: eukan
 channels:
@@ -48,25 +40,19 @@ dependencies:
   - augustus>=3.5
   - codingquarry>=2.0
   - diamond
-  - evidencemodeler>=2.1
-  - fasta3
   - genomethreader>=1.7
-  - gmap>=2024
-  - pasa>=2.5
   - repeatmasker>=4.1
   - repeatmodeler>=2.0
   - rmblast
   - samtools>=1.20
   - segemehl>=0.3.4
   - snap
-  - spades>=3.15
+  - spades>=4.2
   - spaln>=3.0
   - star>=2.7
-  - stringtie>=2.2
+  - stringtie>=3.0
   - table2asn>=1.28
   - trf>=4.09
-  - trinity>=2.15
-  - ucsc-blat
 
   # Build dependencies (needed to compile fitild from source)
   - gsl

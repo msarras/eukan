@@ -31,22 +31,20 @@ def _map_cmds(cmds):
     return [c for c in cmds if c and c[0] in ("STAR", "STARlong") and "--readFilesIn" in c]
 
 
-def test_maps_both_de_novo_assemblies(tmp_path, monkeypatch):
-    for name in ("trinity-denovo.fasta", "rnaspades.fasta"):
-        (tmp_path / name).write_text(">t\nACGTACGT\n")
+def test_maps_de_novo_assembly(tmp_path, monkeypatch):
+    (tmp_path / "rnaspades.fasta").write_text(">t\nACGTACGT\n")
     cmds = _mock(monkeypatch, tmp_path)
 
     star.map_transcripts_star(_config(tmp_path))
 
     assert sum(1 for c in cmds if "genomeGenerate" in c) == 1  # one genome index
     queries = {Path(c[c.index("--readFilesIn") + 1]).name for c in _map_cmds(cmds)}
-    assert queries == {"trinity-denovo.fasta", "rnaspades.fasta"}
-    assert (tmp_path / "trinity-denovo.genome.bam").exists()
+    assert queries == {"rnaspades.fasta"}
     assert (tmp_path / "rnaspades.genome.bam").exists()
 
 
 def test_star_flags_ungapped_local(tmp_path, monkeypatch):
-    (tmp_path / "trinity-denovo.fasta").write_text(">t\nACGTACGT\n")
+    (tmp_path / "rnaspades.fasta").write_text(">t\nACGTACGT\n")
     cmds = _mock(monkeypatch, tmp_path)
 
     star.map_transcripts_star(_config(tmp_path))
@@ -55,7 +53,7 @@ def test_star_flags_ungapped_local(tmp_path, monkeypatch):
     assert cmd[cmd.index("--alignEndsType") + 1] == "Local"   # soft-clip the SL
     assert cmd[cmd.index("--alignIntronMax") + 1] == "1"      # ungapped, no SL split
     assert cmd[cmd.index("--outReadsUnmapped") + 1] == "Fastx"
-    assert ["samtools", "index", "trinity-denovo.genome.bam"] in cmds
+    assert ["samtools", "index", "rnaspades.genome.bam"] in cmds
 
 
 def test_prefers_jaccard_clipped_query(tmp_path, monkeypatch):
@@ -71,7 +69,7 @@ def test_prefers_jaccard_clipped_query(tmp_path, monkeypatch):
 
 
 def test_unmapped_captured(tmp_path, monkeypatch):
-    (tmp_path / "trinity-denovo.fasta").write_text(">t\nACGT\n")
+    (tmp_path / "rnaspades.fasta").write_text(">t\nACGT\n")
 
     def fake(cmd, **kw):
         if cmd[0] == "STAR" and "--outFileNamePrefix" in cmd:
@@ -82,7 +80,7 @@ def test_unmapped_captured(tmp_path, monkeypatch):
     monkeypatch.setattr(star, "run_cmd", fake)
     star.map_transcripts_star(_config(tmp_path))
 
-    assert (tmp_path / "trinity-denovo.unmapped_transcripts.fasta").exists()
+    assert (tmp_path / "rnaspades.unmapped_transcripts.fasta").exists()
 
 
 def test_no_assemblies_is_noop(tmp_path, monkeypatch):

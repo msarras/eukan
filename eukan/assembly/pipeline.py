@@ -11,7 +11,6 @@ from eukan.assembly.sl_acceptors import detect_sl_acceptors
 from eukan.assembly.sl_cut import run_sl_cut
 from eukan.assembly.star import map_reads, map_transcripts_star
 from eukan.assembly.stringtie import run_stringtie
-from eukan.assembly.trinity import run_trinity
 from eukan.infra.artifacts import Artifact
 from eukan.infra.manifest import ASSEMBLY
 from eukan.infra.pipeline import (
@@ -38,11 +37,10 @@ def _aligner_step(aligner: str) -> StepSpec:
 
 
 def _steps_for(aligner: str) -> list[StepSpec]:
-    """Assembly steps: <aligner> → trinity (de novo) → stringtie (genome-guided)
-    → rnaspades → jaccard → map_transcripts → sl_detect → sl_cut → combinr."""
+    """Assembly steps: <aligner> → stringtie (genome-guided) → rnaspades (de novo)
+    → jaccard → map_transcripts → sl_detect → sl_cut → combinr."""
     return [
         _aligner_step(aligner),
-        StepSpec("trinity", run_trinity, "trinity-denovo.fasta", "-T / --run-trinity"),
         StepSpec("stringtie", run_stringtie, "stringtie.gtf", "--run-stringtie"),
         StepSpec("rnaspades", run_rnaspades, "rnaspades.fasta", "--run-rnaspades"),
         # No declared output: jaccard rewrites each transcript FASTA into a
@@ -51,7 +49,7 @@ def _steps_for(aligner: str) -> list[StepSpec]:
         StepSpec("jaccard", run_jaccard, None, "--run-jaccard"),
         StepSpec(
             "map_transcripts", map_transcripts_star,
-            "trinity-denovo.genome.bam", "--run-map-transcripts",
+            "rnaspades.genome.bam", "--run-map-transcripts",
         ),
         # sl_detect/sl_cut have no declared output: with no SL signal sl_detect
         # writes a header-only sl_acceptors.gff3 (zero features) and sl_cut is a
@@ -70,7 +68,6 @@ def force_steps_from_run_flags(
     aligner: str = "star",
     run_star: bool = False,
     run_segemehl: bool = False,
-    run_trinity: bool = False,
     run_stringtie: bool = False,
     run_rnaspades: bool = False,
     run_jaccard: bool = False,
@@ -89,7 +86,7 @@ def force_steps_from_run_flags(
         ASSEMBLY, _steps_for(aligner),
         force=force,
         run_star=run_star, run_segemehl=run_segemehl,
-        run_trinity=run_trinity, run_stringtie=run_stringtie,
+        run_stringtie=run_stringtie,
         run_rnaspades=run_rnaspades, run_jaccard=run_jaccard,
         run_map_transcripts=run_map_transcripts,
         run_sl_detect=run_sl_detect, run_sl_cut=run_sl_cut,

@@ -5,10 +5,10 @@ captures non-canonical introns (e.g. the dominant CG-AG introns of diplonemids
 such as *Hemistasia*) that STAR would miss or misplace. segemehl has no native
 splice-junction table, so we derive a STAR-format ``SJ.out.tab`` from the BAM's
 N-CIGAR junctions (:func:`align_hints.sj_table_from_bam`) and reuse the shared
-post-alignment processing verbatim. Downstream steps (GeneMark, AUGUSTUS,
-Trinity, PASA) therefore see the identical contract STAR produces — including
-the ``splice_site_summary.json`` that lets AUGUSTUS allow the non-canonical
-splice sites via ``--allow_hinted_splicesites``.
+post-alignment processing verbatim. Downstream steps (GeneMark, AUGUSTUS, and
+transcript assembly) therefore see the identical contract STAR produces —
+including the ``splice_site_summary.json`` that lets AUGUSTUS allow the
+non-canonical splice sites via ``--allow_hinted_splicesites``.
 """
 
 from __future__ import annotations
@@ -194,7 +194,6 @@ def map_reads_segemehl(config: AssemblyConfig) -> None:
 # memory, while segemehl without `-S` emits no soft-clips for SL detection. These
 # (query FASTA, output BAM) pairs and the jaccard-sibling resolver are shared.
 _TRANSCRIPT_SETS: tuple[tuple[str, str], ...] = (
-    ("trinity-denovo.fasta", "trinity-denovo.genome.bam"),
     ("rnaspades.fasta", "rnaspades.genome.bam"),
 )
 _GENOME_BAM_SUFFIX = ".genome.bam"

@@ -269,15 +269,15 @@ def _execute_steps(config: PipelineConfig, manifest: RunManifest) -> Path:
 
       - has_transcripts + is_fungus
             ORF || GeneMark, then spaln (intron-hinted), AUGUSTUS,
-            SNAP || CodingQuarry, EVM(spaln, augustus, snap, cq, trans)
+            SNAP || CodingQuarry, consensus(spaln, augustus, snap, cq, trans)
       - has_transcripts + not is_fungus
             ORF || GeneMark, spaln, AUGUSTUS, *no SNAP/CodingQuarry*,
-            EVM(spaln, augustus, trans)
+            consensus(spaln, augustus, trans)
       - no transcripts + (is_fungus | is_protist)
             GeneMark, spaln, AUGUSTUS, SNAP || CodingQuarry,
-            EVM(spaln, augustus, snap, cq)
+            consensus(spaln, augustus, snap, cq)
       - no transcripts + neither
-            GeneMark, spaln, AUGUSTUS, SNAP, EVM(spaln, augustus, snap, genemark)
+            GeneMark, spaln, AUGUSTUS, SNAP, consensus(spaln, augustus, snap, genemark)
     """
     ev: dict[str, Path] = {}
     ev = _phase_orf_and_genemark(config, manifest, ev)
@@ -371,12 +371,12 @@ def _phase_snap_codingquarry(
 def _phase_evm(
     config: PipelineConfig, manifest: RunManifest, ev: dict[str, Path],
 ) -> Path:
-    """Phase 5: EVM consensus. Argument order varies with which evidence ran."""
-    evm_args: list[Path] = [ev["spaln"], ev["augustus"]]
+    """Phase 5: combinr consensus. Argument order varies with which evidence ran."""
+    consensus_args: list[Path] = [ev["spaln"], ev["augustus"]]
     if "snap" in ev:
-        evm_args.append(ev["snap"])
+        consensus_args.append(ev["snap"])
     if "codingquarry" in ev:
-        evm_args.append(ev["codingquarry"])
+        consensus_args.append(ev["codingquarry"])
 
     transcripts: Path | None = None
     if config.has_transcripts:
@@ -384,12 +384,10 @@ def _phase_evm(
         transcripts = config.transcripts_gff
     elif "snap" in ev and not (config.is_fungus or config.is_protist):
         # Protein-only non-fungus/protist: stand GeneMark in as the
-        # transcript_alignments input EVM expects (there is no PASA
-        # output here). The file is staged under nr_transcripts.gff3
-        # in run_evm so EVM's perl scripts find it by name.
+        # transcript_alignments input the consensus engine expects.
         transcripts = ev["genemark"]
 
     return _run_step(
         config, manifest, "evm_consensus_models", build_consensus_models,
-        *evm_args, transcripts=transcripts,
+        *consensus_args, transcripts=transcripts,
     )

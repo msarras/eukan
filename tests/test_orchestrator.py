@@ -105,7 +105,7 @@ class TestAssemblyForceStepsFromRunFlags:
     """
 
     _ALL_KEYS: ClassVar[list[str]] = [
-        "assembly/star", "assembly/trinity", "assembly/stringtie",
+        "assembly/star", "assembly/stringtie",
         "assembly/rnaspades", "assembly/jaccard", "assembly/map_transcripts",
         "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
     ]
@@ -120,9 +120,6 @@ class TestAssemblyForceStepsFromRunFlags:
 
     def test_run_star_alone_forces_star_only(self):
         assert assembly_force_steps_from_run_flags(run_star=True) == ["assembly/star"]
-
-    def test_run_trinity_alone_forces_trinity_only(self):
-        assert assembly_force_steps_from_run_flags(run_trinity=True) == ["assembly/trinity"]
 
     def test_run_combinr_alone_forces_combinr_only(self):
         assert assembly_force_steps_from_run_flags(run_combinr=True) == ["assembly/combinr"]
@@ -152,7 +149,7 @@ class TestAssemblyForceStepsFromRunFlags:
         result = assembly_force_steps_from_run_flags(
             run_combinr=True, run_sl_cut=True, run_sl_detect=True,
             run_map_transcripts=True, run_jaccard=True, run_rnaspades=True,
-            run_stringtie=True, run_trinity=True, run_star=True,
+            run_stringtie=True, run_star=True,
         )
         assert result == self._ALL_KEYS
 
