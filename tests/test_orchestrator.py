@@ -106,7 +106,8 @@ class TestAssemblyForceStepsFromRunFlags:
 
     _ALL_KEYS: ClassVar[list[str]] = [
         "assembly/star", "assembly/trinity", "assembly/rnaspades",
-        "assembly/sl_deplete", "assembly/map_transcripts", "assembly/combinr",
+        "assembly/sl_deplete", "assembly/jaccard", "assembly/map_transcripts",
+        "assembly/combinr",
     ]
 
     def test_no_flags_returns_empty(self):
@@ -142,8 +143,8 @@ class TestAssemblyForceStepsFromRunFlags:
     def test_step_order_is_pipeline_order(self):
         """Returned keys follow pipeline order regardless of kwarg order."""
         result = assembly_force_steps_from_run_flags(
-            run_combinr=True, run_map_transcripts=True, run_sl_deplete=True,
-            run_rnaspades=True, run_trinity=True, run_star=True,
+            run_combinr=True, run_map_transcripts=True, run_jaccard=True,
+            run_sl_deplete=True, run_rnaspades=True, run_trinity=True, run_star=True,
         )
         assert result == self._ALL_KEYS
 

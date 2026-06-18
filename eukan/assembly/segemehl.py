@@ -200,6 +200,17 @@ _TRANSCRIPT_SETS: tuple[tuple[str, str], ...] = (
 _GENOME_BAM_SUFFIX = ".genome.bam"
 
 
+def _resolve_query(wd: Path, query_name: str) -> Path:
+    """The transcript FASTA to map: the jaccard-clipped sibling if it exists.
+
+    The jaccard step (``assembly/jaccard.py``) rewrites each de novo / genome-
+    guided FASTA into a ``<stem>.jaccard.fasta``; prefer it so fused contigs are
+    split before consolidation. Falls back to the original when clipping is off.
+    """
+    clipped = wd / query_name.replace(".fasta", ".jaccard.fasta")
+    return clipped if clipped.exists() and clipped.stat().st_size > 0 else wd / query_name
+
+
 def _map_one_transcript_set(
     config: AssemblyConfig, index: Path, query: Path, out_bam: str
 ) -> None:
@@ -254,9 +265,9 @@ def map_transcripts_segemehl(config: AssemblyConfig) -> None:
     """
     wd = config.work_dir
     sets = [
-        (wd / query, out_bam)
-        for query, out_bam in _TRANSCRIPT_SETS
-        if (wd / query).exists() and (wd / query).stat().st_size > 0
+        (query, out_bam)
+        for query_name, out_bam in _TRANSCRIPT_SETS
+        if (query := _resolve_query(wd, query_name)).exists() and query.stat().st_size > 0
     ]
     if not sets:
         log.warning("No assembled transcripts found to map; skipping.")

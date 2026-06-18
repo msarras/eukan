@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from eukan.assembly.combinr import run_combinr
+from eukan.assembly.jaccard import run_jaccard
 from eukan.assembly.rnaspades import run_rnaspades
 from eukan.assembly.segemehl import map_reads_segemehl, map_transcripts_segemehl
 from eukan.assembly.sl_depletion import run_sl_depletion
@@ -34,7 +35,7 @@ def _aligner_step(aligner: str) -> StepSpec:
 
 
 def _steps_for(aligner: str) -> list[StepSpec]:
-    """Assembly steps: <aligner> → trinity → rnaspades → sl_deplete →
+    """Assembly steps: <aligner> → trinity → rnaspades → sl_deplete → jaccard →
     map_transcripts → combinr."""
     return [
         _aligner_step(aligner),
@@ -44,6 +45,10 @@ def _steps_for(aligner: str) -> list[StepSpec]:
             "sl_deplete", run_sl_depletion,
             "trinity-denovo.sl_depleted.fasta", "--run-sl-deplete",
         ),
+        # No declared output: jaccard rewrites each transcript FASTA into a
+        # ``.jaccard.fasta`` sibling, but on single-end input (or zero clips) it
+        # legitimately writes nothing, so stale-output validation must not fire.
+        StepSpec("jaccard", run_jaccard, None, "--run-jaccard"),
         StepSpec(
             "map_transcripts", map_transcripts_segemehl,
             "trinity-gg.genome.bam", "--run-map-transcripts",
@@ -63,6 +68,7 @@ def force_steps_from_run_flags(
     run_trinity: bool = False,
     run_rnaspades: bool = False,
     run_sl_deplete: bool = False,
+    run_jaccard: bool = False,
     run_map_transcripts: bool = False,
     run_combinr: bool = False,
     force: bool = False,
@@ -77,7 +83,8 @@ def force_steps_from_run_flags(
         force=force,
         run_star=run_star, run_segemehl=run_segemehl,
         run_trinity=run_trinity, run_rnaspades=run_rnaspades,
-        run_sl_deplete=run_sl_deplete, run_map_transcripts=run_map_transcripts,
+        run_sl_deplete=run_sl_deplete, run_jaccard=run_jaccard,
+        run_map_transcripts=run_map_transcripts,
         run_combinr=run_combinr,
     )
 
@@ -91,5 +98,6 @@ def run_assembly(
     run_simple_pipeline(
         ASSEMBLY, _steps_for(config.aligner), config,
         force_steps=force_steps,
-        skip=lambda s: s.name == "rnaspades" and not config.rnaspades,
+        skip=lambda s: (s.name == "rnaspades" and not config.rnaspades)
+        or (s.name == "jaccard" and not config.jaccard_clip),
     )

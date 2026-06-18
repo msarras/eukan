@@ -23,10 +23,15 @@ def _run_trinity_mode(
 
     Skips when ``<prefix>.fasta`` already exists. *mode_args* carries the
     mode-specific flags (genome-guided BAM vs de-novo reads); the shared
-    memory/CPU/cleanup/strand/jaccard flags are added here. Handles both the
+    memory/CPU/cleanup/strand flags are added here. Handles both the
     ``--full_cleanup`` output (``<prefix>.<cleanup_name>`` beside the dir) and
     the no-cleanup layout (``<prefix>/<cleanup_name>`` inside it), then removes
     the working dir.
+
+    Jaccard clipping is *not* delegated to Trinity (``--jaccard_clip``): the
+    standalone :mod:`eukan.assembly.jaccard` step clips every assembly uniformly
+    (including rnaSPAdes, which Trinity cannot), so passing it here too would
+    double-clip Trinity's contigs.
     """
     wd = config.work_dir
     final = wd / f"{prefix}.fasta"
@@ -37,7 +42,6 @@ def _run_trinity_mode(
     lib_type_args = (
         ["--SS_lib_type", config.strand_specific] if config.strand_specific else []
     )
-    jaccard_args = ["--jaccard_clip"] if config.jaccard_clip else []
     run_cmd(
         [
             "Trinity",
@@ -47,7 +51,6 @@ def _run_trinity_mode(
             "--full_cleanup",
             "--output", prefix,
             *lib_type_args,
-            *jaccard_args,
         ],
         cwd=wd,
     )

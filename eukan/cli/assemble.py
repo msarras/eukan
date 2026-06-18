@@ -80,6 +80,10 @@ from eukan.cli._framework import (
 @optgroup.option("--run-rnaspades", is_flag=True, help="Force re-run rnaSPAdes assembly.")
 @optgroup.option("--run-sl-deplete", is_flag=True, help="Force re-run SL depletion.")
 @optgroup.option(
+    "--run-jaccard", is_flag=True,
+    help="Force re-run jaccard clipping of fused transcripts.",
+)
+@optgroup.option(
     "--run-map-transcripts", is_flag=True,
     help="Force re-run segemehl transcript→genome mapping.",
 )
@@ -105,6 +109,7 @@ def assemble(
     run_trinity: bool,
     run_rnaspades: bool,
     run_sl_deplete: bool,
+    run_jaccard: bool,
     run_map_transcripts: bool,
     run_combinr: bool,
     jaccard_clip: bool,
@@ -171,7 +176,8 @@ def assemble(
         aligner=aligner,
         run_star=run_star, run_segemehl=run_segemehl,
         run_trinity=run_trinity, run_rnaspades=run_rnaspades,
-        run_sl_deplete=run_sl_deplete, run_map_transcripts=run_map_transcripts,
+        run_sl_deplete=run_sl_deplete, run_jaccard=run_jaccard,
+        run_map_transcripts=run_map_transcripts,
         run_combinr=run_combinr, force=force,
     )
     run_assembly(config, force_steps=force_steps or None)
