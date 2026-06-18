@@ -105,9 +105,9 @@ class TestAssemblyForceStepsFromRunFlags:
     """
 
     _ALL_KEYS: ClassVar[list[str]] = [
-        "assembly/star", "assembly/trinity", "assembly/rnaspades",
-        "assembly/sl_deplete", "assembly/jaccard", "assembly/map_transcripts",
-        "assembly/combinr",
+        "assembly/star", "assembly/trinity", "assembly/stringtie",
+        "assembly/rnaspades", "assembly/jaccard", "assembly/map_transcripts",
+        "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
     ]
 
     def test_no_flags_returns_empty(self):
@@ -130,6 +130,13 @@ class TestAssemblyForceStepsFromRunFlags:
     def test_run_rnaspades_alone_forces_rnaspades_only(self):
         assert assembly_force_steps_from_run_flags(run_rnaspades=True) == ["assembly/rnaspades"]
 
+    def test_run_stringtie_alone_forces_stringtie_only(self):
+        assert assembly_force_steps_from_run_flags(run_stringtie=True) == ["assembly/stringtie"]
+
+    def test_run_sl_steps_alone(self):
+        assert assembly_force_steps_from_run_flags(run_sl_detect=True) == ["assembly/sl_detect"]
+        assert assembly_force_steps_from_run_flags(run_sl_cut=True) == ["assembly/sl_cut"]
+
     def test_run_star_with_force_takes_run_flag(self):
         """--run-star --force scopes to star; --run-X takes precedence over --force."""
         assert assembly_force_steps_from_run_flags(run_star=True, force=True) == [
@@ -143,8 +150,9 @@ class TestAssemblyForceStepsFromRunFlags:
     def test_step_order_is_pipeline_order(self):
         """Returned keys follow pipeline order regardless of kwarg order."""
         result = assembly_force_steps_from_run_flags(
-            run_combinr=True, run_map_transcripts=True, run_jaccard=True,
-            run_sl_deplete=True, run_rnaspades=True, run_trinity=True, run_star=True,
+            run_combinr=True, run_sl_cut=True, run_sl_detect=True,
+            run_map_transcripts=True, run_jaccard=True, run_rnaspades=True,
+            run_stringtie=True, run_trinity=True, run_star=True,
         )
         assert result == self._ALL_KEYS
 

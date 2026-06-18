@@ -6,9 +6,9 @@ independently-transcribed genes into a single contig. Trinity's
 ``--jaccard_clip`` detects these by mapping read pairs back to the assembled
 contigs and cutting where no read-pair fragment *bridges* a position; but it
 only ever clips Trinity's own output. This module applies the same logic
-uniformly to every assembled transcript set (Trinity-GG, SL-depleted de novo
-Trinity, SL-depleted rnaSPAdes), so the consolidation step (combinr) never sees
-an un-clipped fused contig regardless of which assembler produced it.
+uniformly to every de novo assembled transcript set (de novo Trinity and
+rnaSPAdes), so the consolidation step (combinr) never sees an un-clipped fused
+contig regardless of which assembler produced it.
 
 Algorithm (faithful to Trinity, see ``trinityrnaseq/util/support_scripts/``):
 
@@ -73,13 +73,12 @@ _MAX_INSERT = 500          # proper-pair insert-size ceiling
 _MIN_SEGMENT = 25          # shortest split segment kept (Trinity's k-mer floor)
 _REPOSITION_HALF_WIN = _TROUGH_WIN // 2  # coverage-reposition search radius (100)
 
-# The de novo / genome-guided FASTAs the map_transcripts step consumes; the
-# jaccard step rewrites each into a ``.jaccard.fasta`` sibling that
-# ``segemehl.map_transcripts_segemehl`` prefers when present.
+# The de novo FASTAs the map_transcripts step consumes; the jaccard step rewrites
+# each into a ``.jaccard.fasta`` sibling that ``star.map_transcripts_star``
+# prefers when present.
 _TRANSCRIPT_FASTAS = (
-    "trinity-gg.fasta",
-    "trinity-denovo.sl_depleted.fasta",
-    "rnaspades.sl_depleted.fasta",
+    "trinity-denovo.fasta",
+    "rnaspades.fasta",
 )
 
 

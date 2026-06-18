@@ -235,7 +235,7 @@ def test_run_jaccard_noop_on_single_end(tmp_path, monkeypatch, caplog):
         raise AssertionError("STAR must not run on single-end input")
 
     monkeypatch.setattr(j, "_clip_one_fasta", _boom)
-    (tmp_path / "rnaspades.sl_depleted.fasta").write_text(">c1\nACGTACGT\n")
+    (tmp_path / "rnaspades.fasta").write_text(">c1\nACGTACGT\n")
     config = AssemblyConfig(
         genome=tmp_path / "genome.fa", work_dir=tmp_path,
         single_reads=tmp_path / "reads.fq", num_cpu=1,
@@ -244,7 +244,7 @@ def test_run_jaccard_noop_on_single_end(tmp_path, monkeypatch, caplog):
         run_jaccard(config)
     assert "paired reads" in caplog.text
     # No .jaccard.fasta written.
-    assert not (tmp_path / "rnaspades.sl_depleted.jaccard.fasta").exists()
+    assert not (tmp_path / "rnaspades.jaccard.fasta").exists()
 
 
 # --- fragment extraction from a BAM ----------------------------------------

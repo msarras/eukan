@@ -65,17 +65,12 @@ def _run_trinity_mode(
 
 
 def run_trinity(config: AssemblyConfig) -> None:
-    """Run genome-guided and de novo Trinity assembly."""
-    _run_trinity_mode(
-        config,
-        prefix="trinity-gg",
-        cleanup_name="Trinity-GG.fasta",
-        log_message="Running genome-guided Trinity assembly...",
-        mode_args=[
-            "--genome_guided_bam", config.aligner_bam,
-            "--genome_guided_max_intron", str(config.max_intron_len),
-        ],
-    )
+    """Run de novo Trinity assembly.
+
+    Genome-guided assembly is handled by StringTie
+    (:mod:`eukan.assembly.stringtie`); Trinity contributes the de novo
+    transcripts only.
+    """
     _run_trinity_mode(
         config,
         prefix="trinity-denovo",

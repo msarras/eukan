@@ -6,7 +6,6 @@ from pathlib import Path
 
 from eukan.assembly import combinr
 from eukan.assembly.combinr import (
-    _non_overlapping,
     _parse_attrs,
     _parse_combinr_gff3,
     _Transcript,
@@ -48,21 +47,6 @@ def test_parse_combinr_gff3_groups_and_sorts_exons(tmp_path):
     assert tx.tid == "m1" and tx.chrom == "chr1" and tx.strand == "+"
     assert tx.exons == [(100, 200), (300, 400)]  # exon-sorted
     assert tx.start == 100 and tx.end == 400
-
-
-# --- jaccard overlap filter ------------------------------------------------
-
-
-def test_non_overlapping_is_strand_agnostic():
-    ref = [_Transcript("t1", "chr1", "+", [(100, 200)])]
-    cands = [
-        _Transcript("same_strand_overlap", "chr1", "+", [(150, 250)]),
-        _Transcript("opp_strand_overlap", "chr1", "-", [(150, 180)]),
-        _Transcript("downstream", "chr1", "+", [(300, 400)]),
-        _Transcript("other_contig", "chr2", "+", [(100, 200)]),
-    ]
-    kept = {t.tid for t in _non_overlapping(cands, ref)}
-    assert kept == {"downstream", "other_contig"}  # both overlaps dropped
 
 
 # --- artifact writers ------------------------------------------------------
@@ -136,73 +120,54 @@ def test_combinr_path_override(tmp_path, monkeypatch):
 
 # --- run_combinr integration (combinr mocked) ------------------------------
 
-_TRINITY_GFF = """##gff-version 3
-chr1\tcombinr\tgene\t100\t400\t.\t+\t.\tID=tg
-chr1\tcombinr\tmRNA\t100\t400\t.\t+\t.\tID=tm;Parent=tg
-chr1\tcombinr\texon\t100\t400\t.\t+\t.\tID=tm.exon1;Parent=tm
-"""
-_RNASPADES_GFF = """##gff-version 3
-chr1\tcombinr\tgene\t150\t350\t.\t+\t.\tID=rg1
-chr1\tcombinr\tmRNA\t150\t350\t.\t+\t.\tID=rm_overlap;Parent=rg1
-chr1\tcombinr\texon\t150\t350\t.\t+\t.\tID=rm_overlap.exon1;Parent=rm_overlap
-chr1\tcombinr\tgene\t600\t700\t.\t+\t.\tID=rg2
-chr1\tcombinr\tmRNA\t600\t700\t.\t+\t.\tID=rm_clear;Parent=rg2
-chr1\tcombinr\texon\t600\t700\t.\t+\t.\tID=rm_clear.exon1;Parent=rm_clear
-"""
+_CUT_MODELS = (
+    "stringtie.sl_cut.gff3",
+    "trinity-denovo.genome.sl_cut.gff3",
+    "rnaspades.genome.sl_cut.gff3",
+)
 
 
 def _setup_run(tmp_path):
     (tmp_path / "genome.fa").write_text(">chr1\n" + "ACGT" * 250 + "\n")  # 1000 bp
-    for b in ("trinity-gg.genome.bam", "trinity-denovo.genome.bam", "rnaspades.genome.bam"):
-        (tmp_path / b).write_text("bam")
+    for f in _CUT_MODELS:
+        (tmp_path / f).write_text("##gff-version 3\n")  # non-empty; combinr mocked
 
 
 def _fake_assemble(calls):
-    def fake(config, bams, out_gff):
-        names = {Path(b).name for b in bams}
-        calls.append(names)
-        out_gff.write_text(_RNASPADES_GFF if "rnaspades.genome.bam" in names else _TRINITY_GFF)
+    def fake(config, inputs, out_gff):
+        calls.append({Path(p).name for p in inputs})
+        out_gff.write_text(COMBINR_GFF)  # the consolidated combinr output
     return fake
 
 
-def test_run_combinr_jaccard_filters_overlapping_rnaspades(tmp_path, monkeypatch):
+def test_run_combinr_consolidates_cut_models(tmp_path, monkeypatch):
     _setup_run(tmp_path)
     calls: list[set] = []
     monkeypatch.setattr(combinr, "_run_combinr_assemble", _fake_assemble(calls))
 
-    run_combinr(_config(tmp_path, jaccard_clip=True))
+    run_combinr(_config(tmp_path))
 
-    # two combinr runs: trinity-only, then rnaspades-only
-    assert len(calls) == 2
-    assert {"trinity-gg.genome.bam", "trinity-denovo.genome.bam"} in calls
-    assert {"rnaspades.genome.bam"} in calls
-
-    ids = {ln.split("\t")[8].split(";")[0] for ln in
-           (tmp_path / Artifact.NR_TRANSCRIPTS_GFF).read_text().splitlines()}
-    # trinity kept, non-overlapping rnaspades kept, overlapping rnaspades dropped
-    assert "ID=tm:exon:1" in ids
-    assert any("rm_clear" in i for i in ids)
-    assert not any("rm_overlap" in i for i in ids)
+    # single combinr run over the SL-cut models (StringTie + both de novo)
+    assert len(calls) == 1
+    assert calls[0] == set(_CUT_MODELS)
+    assert (tmp_path / Artifact.NR_TRANSCRIPTS_GFF).exists()
     assert (tmp_path / Artifact.NR_TRANSCRIPTS_FASTA).exists()
     assert (tmp_path / Artifact.RNASEQ_HINTS).exists()
 
 
-def test_run_combinr_no_jaccard_consolidates_all(tmp_path, monkeypatch):
+def test_run_combinr_skips_empty_cut_models(tmp_path, monkeypatch):
     _setup_run(tmp_path)
+    # An empty (zero-byte) cut model is ignored, not fed to combinr.
+    (tmp_path / "rnaspades.genome.sl_cut.gff3").write_text("")
     calls: list[set] = []
     monkeypatch.setattr(combinr, "_run_combinr_assemble", _fake_assemble(calls))
 
-    run_combinr(_config(tmp_path, jaccard_clip=False))
+    run_combinr(_config(tmp_path))
 
-    # single combinr run over all three BAMs
-    assert len(calls) == 1
-    assert calls[0] == {
-        "trinity-gg.genome.bam", "trinity-denovo.genome.bam", "rnaspades.genome.bam"
-    }
-    assert (tmp_path / Artifact.NR_TRANSCRIPTS_GFF).exists()
+    assert calls[0] == {"stringtie.sl_cut.gff3", "trinity-denovo.genome.sl_cut.gff3"}
 
 
-def test_run_combinr_errors_without_bams(tmp_path, monkeypatch):
+def test_run_combinr_errors_without_inputs(tmp_path, monkeypatch):
     (tmp_path / "genome.fa").write_text(">chr1\nACGT\n")
     monkeypatch.setattr(combinr, "_run_combinr_assemble", _fake_assemble([]))
     import pytest

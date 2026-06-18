@@ -326,10 +326,16 @@ class AssemblyConfig(_StepRunSettings):
     min_sl_fragment: int = 25
     """Minimum length (nt) of a fragment kept after in-silico SL trans-splicing."""
     sl_sequence: str | None = None
-    """Override the spliced-leader sequence used for depletion (else taken from the
-    soft-clip diagnostic verdict)."""
+    """Override the spliced-leader sequence used for SL detection (else taken from
+    the read soft-clip verdict, or the dominant de novo insertion motif)."""
     combinr_path: Path | None = None
     """Explicit path to the combinr binary; resolved from PATH when unset."""
+    sl_cluster_window: int = 5
+    """Genomic window (bp) for consolidating SL acceptor sites per (chrom, strand)."""
+    min_sl_clip_len: int = 8
+    """Minimum soft-clip length (bp) considered as a spliced-leader acceptor signal."""
+    min_sl_insertion_len: int = 10
+    """Minimum internal-insertion length (bp) considered as a spliced-leader signal."""
 
     @computed_field  # type: ignore[prop-decorator]
     @property

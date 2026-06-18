@@ -39,6 +39,9 @@ class Artifact(StrEnum):
     # --- assembly diagnostic emitted by the soft-clip / intron walk ---
     SOFTCLIP_DIAGNOSTIC = "softclip_diagnostic_summary.json"
 
+    # --- SL trans-splice acceptor sites (persist-only; not auto-discovered) ---
+    SL_ACCEPTORS = "sl_acceptors.gff3"
+
     # --- repeats outputs consumed by AUGUSTUS ---
     REPEATMASK_HINTS = "hints_repeatmask.gff"
 
@@ -54,6 +57,7 @@ _PRODUCER: dict[Artifact, str] = {
     Artifact.RNASEQ_HINTS:         "assemble",
     Artifact.SPLICE_SUMMARY:       "assemble",
     Artifact.SOFTCLIP_DIAGNOSTIC:  "assemble",
+    Artifact.SL_ACCEPTORS:         "assemble",
     Artifact.REPEATMASK_HINTS:     "mask-repeats",
     Artifact.FINAL_GFF3:           "annotate",
     Artifact.FINAL_FUNC_GFF3:      "func-annot",
@@ -78,6 +82,15 @@ def find(work_dir: Path, artifact: Artifact) -> Path | None:
         if path.exists():
             return path
     return None
+
+
+def unmapped_transcripts(work_dir: Path, assembler: str) -> Path:
+    """Per-assembler unmapped-transcript FASTA from the map_transcripts step.
+
+    Filename pattern is ``<assembler>.unmapped_transcripts.fasta`` (e.g.
+    ``rnaspades.unmapped_transcripts.fasta``); written for reference only.
+    """
+    return work_dir / f"{assembler}.unmapped_transcripts.fasta"
 
 
 def masked_genome(work_dir: Path, stem: str) -> Path:

@@ -62,6 +62,7 @@ dependencies:
   - spades>=3.15
   - spaln>=3.0
   - star>=2.7
+  - stringtie>=2.2
   - table2asn>=1.28
   - trf>=4.09
   - trinity>=2.15

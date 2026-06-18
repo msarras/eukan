@@ -69,6 +69,20 @@ from eukan.cli._framework import (
     help="Run rnaSPAdes de novo assembly alongside Trinity (consolidated by combinr).",
 )
 @optgroup.option(
+    "--sl-sequence", default=None,
+    help="Override the spliced-leader sequence for trans-splice acceptor detection "
+    "(else recovered from the read soft-clip verdict or de novo insertions).",
+)
+@optgroup.option(
+    "--sl-cluster-window", type=int, default=5, show_default=True,
+    help="Genomic window (bp) for consolidating SL acceptor sites.",
+)
+@optgroup.option(
+    "--combinr-path", type=click.Path(exists=True, path_type=Path), default=None,
+    help="Path to the combinr binary (else resolved from PATH or "
+    "$EUKAN_ASSEMBLE_COMBINR_PATH).",
+)
+@optgroup.option(
     "--memory-gb", type=int, default=None,
     help="Trinity --max_memory cap in GiB. Defaults to 60 percent of "
          "currently-available memory (floored at 4 GiB).",
@@ -76,9 +90,9 @@ from eukan.cli._framework import (
 @optgroup.group("Re-run steps")
 @optgroup.option("--run-star", "-A", is_flag=True, help="Force re-run STAR read mapping.")
 @optgroup.option("--run-segemehl", is_flag=True, help="Force re-run segemehl read mapping.")
-@optgroup.option("--run-trinity", "-T", is_flag=True, help="Force re-run Trinity assembly.")
+@optgroup.option("--run-trinity", "-T", is_flag=True, help="Force re-run de novo Trinity assembly.")
+@optgroup.option("--run-stringtie", is_flag=True, help="Force re-run StringTie genome-guided assembly.")
 @optgroup.option("--run-rnaspades", is_flag=True, help="Force re-run rnaSPAdes assembly.")
-@optgroup.option("--run-sl-deplete", is_flag=True, help="Force re-run SL depletion.")
 @optgroup.option(
     "--run-jaccard", is_flag=True,
     help="Force re-run jaccard clipping of fused transcripts.",
@@ -86,6 +100,14 @@ from eukan.cli._framework import (
 @optgroup.option(
     "--run-map-transcripts", is_flag=True,
     help="Force re-run segemehl transcript→genome mapping.",
+)
+@optgroup.option(
+    "--run-sl-detect", is_flag=True,
+    help="Force re-run SL trans-splice acceptor detection.",
+)
+@optgroup.option(
+    "--run-sl-cut", is_flag=True,
+    help="Force re-run the genomic SL cut of transcript models.",
 )
 @optgroup.option(
     "--run-combinr", is_flag=True,
@@ -107,13 +129,18 @@ def assemble(
     run_star: bool,
     run_segemehl: bool,
     run_trinity: bool,
+    run_stringtie: bool,
     run_rnaspades: bool,
-    run_sl_deplete: bool,
     run_jaccard: bool,
     run_map_transcripts: bool,
+    run_sl_detect: bool,
+    run_sl_cut: bool,
     run_combinr: bool,
     jaccard_clip: bool,
     rnaspades: bool,
+    sl_sequence: str | None,
+    sl_cluster_window: int,
+    combinr_path: Path | None,
     splice_permissive: bool,
     diagnose_softclips: bool,
     code: str,
@@ -162,6 +189,9 @@ def assemble(
         align_mode=align_mode,
         jaccard_clip=jaccard_clip,
         rnaspades=rnaspades,
+        sl_sequence=sl_sequence,
+        sl_cluster_window=sl_cluster_window,
+        combinr_path=resolve_optional_path(combinr_path),
         splice_permissive=splice_permissive,
         diagnose_softclips=diagnose_softclips,
         genetic_code=code,
@@ -175,9 +205,10 @@ def assemble(
     force_steps = force_steps_from_run_flags(
         aligner=aligner,
         run_star=run_star, run_segemehl=run_segemehl,
-        run_trinity=run_trinity, run_rnaspades=run_rnaspades,
-        run_sl_deplete=run_sl_deplete, run_jaccard=run_jaccard,
+        run_trinity=run_trinity, run_stringtie=run_stringtie,
+        run_rnaspades=run_rnaspades, run_jaccard=run_jaccard,
         run_map_transcripts=run_map_transcripts,
+        run_sl_detect=run_sl_detect, run_sl_cut=run_sl_cut,
         run_combinr=run_combinr, force=force,
     )
     run_assembly(config, force_steps=force_steps or None)
