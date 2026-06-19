@@ -24,7 +24,12 @@ def generate_environment_yml() -> str:
         if not tool.conda_package or tool.conda_package in seen:
             continue
         seen.add(tool.conda_package)
-        pin = f">={tool.min_version}" if tool.min_version else ""
+        if tool.conda_pin:
+            pin = tool.conda_pin
+        elif tool.min_version:
+            pin = f">={tool.min_version}"
+        else:
+            pin = ""
         conda_deps.append(f"  - {tool.conda_package}{pin}")
 
     # Tools requiring manual install

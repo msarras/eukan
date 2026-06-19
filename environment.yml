@@ -37,7 +37,7 @@ dependencies:
   - python>=3.10,<3.13
 
   # External tools
-  - augustus>=3.5
+  - augustus=3.5.0=pl5321heb9362c_5
   - codingquarry>=2.0
   - diamond
   - genomethreader>=1.7
@@ -48,8 +48,8 @@ dependencies:
   - segemehl>=0.3.4
   - snap
   - spades>=4.2
-  - spaln>=3.0
-  - star>=2.7
+  - spaln=3.0.6=pl5321hdcf5f25_0
+  - star=2.7.11b=h43eeafb_3
   - stringtie>=3.0
   - table2asn>=1.28
   - trf>=4.09

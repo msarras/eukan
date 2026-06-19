@@ -11,6 +11,9 @@ Schema (per-tool, all fields optional unless noted)::
     required_by     = ["annotate"]                   # subcommands needing this tool
     conda_package   = "augustus"                     # omit if not on bioconda
     min_version     = "3.5"                          # conda pin; omit for unpinned
+    conda_pin       = "=2.7.11b=h43eeafb_3"          # exact version=build; overrides
+                                                     # min_version in environment.yml
+                                                     # (e.g. to hold an x86-64-v2 build)
     install_hint    = "..."                          # shown when tool missing
 
     env_vars = [                                     # env vars the tool needs
@@ -63,6 +66,7 @@ class Tool:
     conda_lib_dirs: tuple[str, ...] = ()
     conda_package: str | None = None
     min_version: str | None = None
+    conda_pin: str | None = None
     install_hint: str | None = None
 
     @property
@@ -95,6 +99,7 @@ def _parse_tool(name: str, cfg: dict[str, Any]) -> Tool:
         conda_lib_dirs=tuple(cfg.get("conda_lib_dirs", ())),
         conda_package=cfg.get("conda_package"),
         min_version=cfg.get("min_version"),
+        conda_pin=cfg.get("conda_pin"),
         install_hint=cfg.get("install_hint"),
     )
 

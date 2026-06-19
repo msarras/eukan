@@ -35,6 +35,9 @@ version_cmd = ["augustus", "--version"]
 required_by = ["annotate"]
 conda_package = "augustus"
 min_version = "3.5"
+# Pinned to an x86-64-v2 build (also covers bundled etraining): bioconda's
+# newer 3.5.0 builds require AVX2 (x86-64-v3) and SIGILL on pre-Haswell CPUs.
+conda_pin = "=3.5.0=pl5321heb9362c_5"
 env_vars = [{ var = "AUGUSTUS_CONFIG_PATH", path = "config" }]
 
 [snap]
@@ -80,6 +83,9 @@ version_cmd = ["STAR", "--version"]
 required_by = ["assemble"]
 conda_package = "star"
 min_version = "2.7"
+# Pinned to the last x86-64-v2 build: bioconda's newer 2.7.11b builds
+# (h5ca1c30_4+) require AVX2 (x86-64-v3) and SIGILL on pre-Haswell CPUs.
+conda_pin = "=2.7.11b=h43eeafb_3"
 
 [stringtie]
 binary = "stringtie"
@@ -109,6 +115,10 @@ version_cmd = ["spaln", "-h"]
 required_by = ["annotate"]
 conda_package = "spaln"
 min_version = "3.0"
+# Pinned to the last x86-64-v2 build: bioconda's newer spaln builds
+# (3.0.6b+, h077b44d/hf426362) require AVX2 (x86-64-v3) and SIGILL on
+# pre-Haswell CPUs.
+conda_pin = "=3.0.6=pl5321hdcf5f25_0"
 env_vars = [
     { var = "ALN_TAB", path = "share/spaln/table" },
     { var = "ALN_DBS", path = "share/spaln/seqdb" },
