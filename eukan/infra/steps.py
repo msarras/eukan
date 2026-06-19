@@ -8,10 +8,11 @@ every wrapper uses to record start/finish/error in the manifest.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import shutil
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import datetime
 from pathlib import Path
 
@@ -64,6 +65,40 @@ def _resolve_step_dir(work_dir: Path, step_name: str, step_dir: Path | None) -> 
 
 
 # ---------------------------------------------------------------------------
+# Input fingerprinting
+# ---------------------------------------------------------------------------
+
+
+def fingerprint_inputs(
+    paths: list[Path] | None, extra: list[str] | None = None
+) -> str | None:
+    """A stable digest of a step's declared inputs, or ``None`` if none.
+
+    Each path contributes its content md5 (or the literal ``MISSING`` when the
+    file is absent/empty), keyed by path so presence *and* content both matter:
+    a stranded GFF3 that only appears once strand-correction runs, or a BAM that
+    a re-run rewrote, both flip the digest. Paths are sorted so the result is
+    order-independent.
+
+    *extra* folds in scalar inputs that aren't files — e.g. ``max_intron_len=2000``
+    — so a step whose behaviour depends on a config value (not just its input
+    files) re-runs when that value changes. Used by :func:`is_step_complete` to
+    re-run a step whose inputs changed since it last completed, rather than
+    reusing a stale output.
+    """
+    if not paths and not extra:
+        return None
+    parts: list[str] = []
+    for path in sorted(paths or [], key=str):
+        if path.exists() and path.stat().st_size > 0:
+            parts.append(f"{path}={md5_file(path)}")
+        else:
+            parts.append(f"{path}=MISSING")
+    parts.extend(sorted(extra or []))
+    return hashlib.md5("\n".join(parts).encode()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
 # Step lifecycle context manager
 # ---------------------------------------------------------------------------
 
@@ -74,6 +109,8 @@ def pipeline_step(
     manifest: RunManifest,
     step_name: str,
     step_dir: Path | None = None,
+    input_files: list[Path] | None = None,
+    input_scalars: list[str] | None = None,
 ) -> Iterator[StepRecord]:
     """Context manager for pipeline step lifecycle.
 
@@ -88,6 +125,12 @@ def pipeline_step(
         step_name: Unique step identifier (used as manifest key).
         step_dir: Directory for the .running sentinel. Defaults to
             ``work_dir / step_name``.
+        input_files: Declared inputs whose fingerprint is recorded on
+            success, so a later resume can detect an input change and
+            re-run rather than reuse a stale output.
+        input_scalars: Non-file inputs (e.g. ``max_intron_len=2000``) folded
+            into the same fingerprint, so a change in a config value the step
+            depends on also makes it stale on resume.
 
     On __enter__: marks step as running, writes sentinel, saves manifest.
     On __exit__: marks step as completed/failed, removes sentinel, checksums output.
@@ -116,6 +159,8 @@ def pipeline_step(
             if output_path.exists():
                 record.output_md5 = md5_file(output_path)
 
+        record.input_md5 = fingerprint_inputs(input_files, input_scalars)
+
         log.info("[%s] Done (%.1fs)", step_name, record.duration_seconds or 0)
 
     except Exception as e:
@@ -128,6 +173,13 @@ def pipeline_step(
 
     finally:
         (sdir / SENTINEL).unlink(missing_ok=True)
+        # Steps that write into the shared work_dir (assembly, repeats) never put
+        # anything in their per-step dir, leaving a confusing empty dir behind once
+        # the sentinel is gone. Remove it when empty; steps that do use it for
+        # output leave it non-empty, so rmdir raises and we keep it.
+        if sdir != work_dir:
+            with suppress(OSError):
+                sdir.rmdir()
         save_manifest(work_dir, manifest)
 
 
@@ -136,12 +188,22 @@ def pipeline_step(
 # ---------------------------------------------------------------------------
 
 
-def is_step_complete(manifest: RunManifest, step_name: str) -> Path | None:
-    """Check if a step was completed in a previous run.
+def is_step_complete(
+    manifest: RunManifest,
+    step_name: str,
+    input_files: list[Path] | None = None,
+    input_scalars: list[str] | None = None,
+) -> Path | None:
+    """Check if a step was completed in a previous run *and is still current*.
 
-    Returns the output path if complete and file exists, else None.
-    Pure predicate: callers are responsible for any user-visible logging
-    that follows from the result.
+    Returns the output path if complete and the file exists, else None.
+    When *input_files* / *input_scalars* are given and the step recorded an
+    input fingerprint, a mismatch (an upstream output was rewritten, a new
+    input appeared, or a tracked config value changed) makes the step stale:
+    returns None so the caller re-runs it instead of reusing an output built
+    from inputs that no longer apply. A step with no recorded fingerprint
+    (older manifest, or no declared inputs) is not treated as stale. Pure
+    predicate: callers own any user-visible logging.
     """
     record = manifest.steps.get(step_name)
     if not record or record.status != StepStatus.completed:
@@ -149,9 +211,15 @@ def is_step_complete(manifest: RunManifest, step_name: str) -> Path | None:
     if not record.output_file:
         return None
     path = Path(record.output_file)
-    if path.exists():
-        return path
-    return None
+    if not path.exists():
+        return None
+    if (
+        (input_files or input_scalars)
+        and record.input_md5 is not None
+        and fingerprint_inputs(input_files, input_scalars) != record.input_md5
+    ):
+        return None
+    return path
 
 
 def is_step_interrupted(work_dir: Path, step_name: str, step_dir: Path | None = None) -> bool:

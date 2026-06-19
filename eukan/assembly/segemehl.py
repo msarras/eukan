@@ -186,13 +186,14 @@ def map_reads_segemehl(config: AssemblyConfig) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Transcript -> genome mapping config (consumed by star.map_transcripts_star)
+# Transcript -> genome mapping config (consumed by star.map_transcripts)
 # ---------------------------------------------------------------------------
 # De novo transcripts are mapped to the genome SPLICED (bounded intron + Local
-# soft-clip) by STARlong (eukan.assembly.star.map_transcripts_star), with segemehl
-# `-S` (`-H 1`, see map_one_transcript_set_segemehl) as the fallback when STARlong
-# fails/under-maps. These (query FASTA, output BAM) pairs and the jaccard-sibling
-# resolver are shared.
+# soft-clip). The dispatcher (eukan.assembly.star.map_transcripts) uses STARlong
+# by default, with segemehl `-S` (`-H 1`, see map_one_transcript_set_segemehl) as
+# the fallback when STARlong fails/under-maps — and as the *primary* mapper when
+# non-canonical splicing is extensive (or --aligner segemehl). These (query FASTA,
+# output BAM) pairs and the jaccard-sibling resolver are shared across both paths.
 _TRANSCRIPT_SETS: tuple[tuple[str, str], ...] = (
     ("rnaspades.fasta", "rnaspades.genome.bam"),
 )

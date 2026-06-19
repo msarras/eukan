@@ -73,7 +73,7 @@ _MIN_SEGMENT = 25          # shortest split segment kept (Trinity's k-mer floor)
 _REPOSITION_HALF_WIN = _TROUGH_WIN // 2  # coverage-reposition search radius (100)
 
 # The de novo FASTAs the map_transcripts step consumes; the jaccard step rewrites
-# each into a ``.jaccard.fasta`` sibling that ``star.map_transcripts_star``
+# each into a ``.jaccard.fasta`` sibling that ``star.map_transcripts``
 # prefers when present.
 _TRANSCRIPT_FASTAS = (
     "rnaspades.fasta",

@@ -10,6 +10,7 @@ strand at trans-splice acceptor sites for any ``.``-strand models.
 
 from __future__ import annotations
 
+from eukan.assembly.bam_introns import split_long_introns
 from eukan.infra.logging import get_logger
 from eukan.infra.runner import run_cmd
 from eukan.settings import AssemblyConfig
@@ -17,6 +18,9 @@ from eukan.settings import AssemblyConfig
 log = get_logger(__name__)
 
 _GTF = "stringtie.gtf"
+# A max-intron-bounded copy of the segemehl read BAM, fed to StringTie so it can't
+# fuse distant loci across an over-long intron. Disposable: regenerated each run.
+_BOUNDED_BAM = "stringtie_input.bam"
 
 
 def run_stringtie(config: AssemblyConfig) -> None:
@@ -25,18 +29,39 @@ def run_stringtie(config: AssemblyConfig) -> None:
     Skips when ``stringtie.gtf`` already exists (mirrors the rnaSPAdes
     idempotence guard). The coordinate-sorted aligner BAM is read directly; no
     BAM index is required by StringTie.
+
+    On the segemehl path (STAR is already ``--alignIntronMax``-bounded) the read
+    BAM can carry over-long introns, so StringTie reads a max-intron-bounded copy
+    (:func:`eukan.assembly.bam_introns.split_long_introns`) instead — splitting
+    those reads stops StringTie fusing distant loci. The shared aligner BAM is
+    left untouched: SL acceptor detection and the non-canonical diagnostic read it
+    and must see the true alignments.
     """
     wd = config.work_dir
     out = wd / _GTF
     if out.exists():
         return
+
+    bam = wd / config.aligner_bam
+    if config.aligner_bam.startswith("segemehl") and config.max_intron_len:
+        bounded = wd / _BOUNDED_BAM
+        n_split = split_long_introns(
+            bam, bounded, max_intron_len=config.max_intron_len, num_cpu=config.num_cpu
+        )
+        log.info(
+            "Bounded read BAM for StringTie: split %d read(s) at introns > %d nt.",
+            n_split, config.max_intron_len,
+        )
+        bam = bounded
+
     log.info("Running StringTie genome-guided assembly...")
     run_cmd(
         [
             "stringtie",
-            str(wd / config.aligner_bam),
+            str(bam),
             "-p", str(config.num_cpu),
             "-o", _GTF,
         ],
         cwd=wd,
     )
+    (wd / _BOUNDED_BAM).unlink(missing_ok=True)

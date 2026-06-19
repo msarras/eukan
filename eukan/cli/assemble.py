@@ -31,10 +31,12 @@ from eukan.cli._framework import (
     help="Strand-specific library type.",
 )
 @optgroup.option(
-    "--aligner", type=click.Choice(["star", "segemehl"]),
-    default="star", show_default=True,
-    help="Read aligner. segemehl is splice-agnostic (captures non-canonical "
-    "splice sites STAR misses); STAR is the default.",
+    "--aligner", type=click.Choice(["auto", "star", "segemehl"]),
+    default="auto", show_default=True,
+    help="Read aligner. 'auto' (default) maps with STAR, then re-maps with "
+    "splice-agnostic segemehl when the diagnostic finds extensive non-canonical "
+    "splicing (so StringTie/hints aren't biased by STAR's canonical alignment). "
+    "'star' skips that escalation; 'segemehl' maps with segemehl from the start.",
 )
 @optgroup.option(
     "--align-mode", "-t", type=click.Choice(["EndToEnd", "Local"]),
@@ -61,7 +63,13 @@ from eukan.cli._framework import (
     help="NCBI genetic code for PASA. Supported: 1=standard, 6=Tetrahymena, 10=Euplotes, 12=Candida.",
 )
 @optgroup.option("--min-intron", "-m", type=int, default=20, show_default=True, help="Minimum intron length.")
-@optgroup.option("--max-intron", "-M", type=int, default=5000, show_default=True, help="Maximum intron length.")
+@optgroup.option(
+    "--max-intron", "-M", type=int, default=5000, show_default=True,
+    help="Maximum intron length, hard-imposed: transcript models are split at any "
+    "longer intron and StringTie reads a bounded BAM. Changing it on a resumed run "
+    "re-runs stringtie/sl_cut/combinr automatically; re-deriving hint files or "
+    "recovering longer introns also needs --run-star/--run-segemehl/--run-map-transcripts.",
+)
 @optgroup.option("--phred", type=click.Choice(["33", "64"]), default="33", show_default=True, help="Phred quality score.")
 @optgroup.option("--jaccard-clip", "-j", is_flag=True, help="Enable jaccard clipping.")
 @optgroup.option(

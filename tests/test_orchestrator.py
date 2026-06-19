@@ -6,10 +6,15 @@ from typing import ClassVar
 
 from eukan.annotation.pipeline import force_steps_from_run_flags
 from eukan.assembly.pipeline import (
+    _steps_for,
+)
+from eukan.assembly.pipeline import (
     force_steps_from_run_flags as assembly_force_steps_from_run_flags,
 )
-from eukan.infra.manifest import RunManifest
+from eukan.infra.manifest import RunManifest, StepRecord, StepStatus
 from eukan.infra.pipeline import run_orchestrated_step
+from eukan.infra.steps import fingerprint_inputs
+from eukan.settings import AssemblyConfig
 
 
 class TestForceStepsFromRunFlags:
@@ -119,42 +124,75 @@ class TestAssemblyForceStepsFromRunFlags:
         """--force alone → re-run every step from scratch."""
         assert assembly_force_steps_from_run_flags(force=True) == self._ALL_KEYS
 
-    def test_run_star_alone_forces_star_only(self):
-        assert assembly_force_steps_from_run_flags(run_star=True) == ["assembly/star"]
+    def test_run_star_cascades_to_genome_guided_consumers(self):
+        """Re-mapping reads invalidates StringTie + SL read-side and their downstream
+        (the de novo assembly side — rnaspades/jaccard/map_transcripts — is independent)."""
+        assert assembly_force_steps_from_run_flags(run_star=True) == [
+            "assembly/star", "assembly/stringtie", "assembly/strand_correct",
+            "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
+        ]
 
     def test_run_combinr_alone_forces_combinr_only(self):
         assert assembly_force_steps_from_run_flags(run_combinr=True) == ["assembly/combinr"]
 
-    def test_run_rnaspades_alone_forces_rnaspades_only(self):
-        assert assembly_force_steps_from_run_flags(run_rnaspades=True) == ["assembly/rnaspades"]
-
-    def test_run_stringtie_alone_forces_stringtie_only(self):
-        assert assembly_force_steps_from_run_flags(run_stringtie=True) == ["assembly/stringtie"]
-
-    def test_run_sl_steps_alone(self):
-        assert assembly_force_steps_from_run_flags(run_sl_detect=True) == ["assembly/sl_detect"]
-        assert assembly_force_steps_from_run_flags(run_sl_cut=True) == ["assembly/sl_cut"]
-
-    def test_run_strand_correct_alone(self):
-        assert assembly_force_steps_from_run_flags(run_strand_correct=True) == [
-            "assembly/strand_correct"
+    def test_run_rnaspades_cascades_through_de_novo_chain(self):
+        """Re-assembling de novo invalidates the whole downstream transcript chain."""
+        assert assembly_force_steps_from_run_flags(run_rnaspades=True) == [
+            "assembly/rnaspades", "assembly/jaccard", "assembly/map_transcripts",
+            "assembly/strand_correct", "assembly/sl_detect", "assembly/sl_cut",
+            "assembly/combinr",
         ]
 
-    def test_run_map_transcripts_also_forces_strand_correct(self):
-        """The new spliced BAM invalidates the converted/corrected models."""
+    def test_run_stringtie_cascades_downstream(self):
+        """StringTie's GTF feeds strand_correct + the SL cut, which feeds combinr."""
+        assert assembly_force_steps_from_run_flags(run_stringtie=True) == [
+            "assembly/stringtie", "assembly/strand_correct",
+            "assembly/sl_cut", "assembly/combinr",
+        ]
+
+    def test_run_sl_steps_cascade_downstream(self):
+        assert assembly_force_steps_from_run_flags(run_sl_detect=True) == [
+            "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr"
+        ]
+        assert assembly_force_steps_from_run_flags(run_sl_cut=True) == [
+            "assembly/sl_cut", "assembly/combinr"
+        ]
+
+    def test_run_strand_correct_cascades_downstream(self):
+        assert assembly_force_steps_from_run_flags(run_strand_correct=True) == [
+            "assembly/strand_correct", "assembly/sl_cut", "assembly/combinr"
+        ]
+
+    def test_run_map_transcripts_cascades_to_sl_and_combinr(self):
+        """The new spliced BAM invalidates every step that reads it, directly or not."""
         assert assembly_force_steps_from_run_flags(run_map_transcripts=True) == [
-            "assembly/map_transcripts", "assembly/strand_correct"
+            "assembly/map_transcripts", "assembly/strand_correct",
+            "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
         ]
 
     def test_run_star_with_force_takes_run_flag(self):
-        """--run-star --force scopes to star; --run-X takes precedence over --force."""
+        """--run-star --force scopes to star's cascade; --run-X takes precedence over --force."""
         assert assembly_force_steps_from_run_flags(run_star=True, force=True) == [
-            "assembly/star"
+            "assembly/star", "assembly/stringtie", "assembly/strand_correct",
+            "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
+        ]
+
+    def test_segemehl_aligner_cascades_to_consumers(self):
+        """The segemehl read step cascades to the same genome-guided consumers as star."""
+        assert assembly_force_steps_from_run_flags(
+            aligner="segemehl", run_segemehl=True
+        ) == [
+            "assembly/segemehl", "assembly/stringtie", "assembly/strand_correct",
+            "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
         ]
 
     def test_multiple_run_flags(self):
+        """--run-star (cascades) plus --run-combinr; union in pipeline order."""
         result = assembly_force_steps_from_run_flags(run_star=True, run_combinr=True)
-        assert result == ["assembly/star", "assembly/combinr"]
+        assert result == [
+            "assembly/star", "assembly/stringtie", "assembly/strand_correct",
+            "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
+        ]
 
     def test_step_order_is_pipeline_order(self):
         """Returned keys follow pipeline order regardless of kwarg order."""
@@ -211,3 +249,242 @@ class TestRunOrchestratedStepOutput:
         record = manifest.steps["annotation/thing2"]
         assert record.output_file == str(out)
         assert record.output_md5 is not None
+
+
+class TestStepDirCleanup:
+    """Per-step dirs that the step never wrote into are removed, not left empty."""
+
+    def test_empty_step_dir_removed_after_completion(self, tmp_path):
+        manifest = RunManifest()
+        sdir = tmp_path / "mystep"
+        out = tmp_path / "out.txt"  # written to work_dir, not the step dir
+
+        def fn():
+            out.write_text("data")
+            return None
+
+        run_orchestrated_step(
+            tmp_path, manifest, "assembly/mystep", fn,
+            step_dir=sdir, output_file=out,
+        )
+        assert out.exists()
+        assert not sdir.exists()  # empty step dir cleaned up
+
+    def test_used_step_dir_is_kept(self, tmp_path):
+        manifest = RunManifest()
+        sdir = tmp_path / "mystep"
+
+        def fn():
+            (sdir / "work.txt").write_text("data")  # step writes into its own dir
+            return None
+
+        run_orchestrated_step(
+            tmp_path, manifest, "assembly/mystep", fn, step_dir=sdir,
+        )
+        assert (sdir / "work.txt").exists()  # non-empty → kept
+
+
+class TestFingerprintInputs:
+    """``fingerprint_inputs`` is a stable, content + presence sensitive digest."""
+
+    def test_none_for_no_inputs(self):
+        assert fingerprint_inputs(None) is None
+        assert fingerprint_inputs([]) is None
+
+    def test_changes_with_content(self, tmp_path):
+        f = tmp_path / "a"
+        f.write_text("1")
+        before = fingerprint_inputs([f])
+        f.write_text("2")
+        assert fingerprint_inputs([f]) != before
+
+    def test_missing_differs_from_present(self, tmp_path):
+        f = tmp_path / "a"
+        missing = fingerprint_inputs([f])
+        f.write_text("x")
+        assert fingerprint_inputs([f]) != missing
+
+    def test_order_independent(self, tmp_path):
+        a = tmp_path / "a"
+        a.write_text("1")
+        b = tmp_path / "b"
+        b.write_text("2")
+        assert fingerprint_inputs([a, b]) == fingerprint_inputs([b, a])
+
+    def test_extra_salt_changes_digest(self, tmp_path):
+        f = tmp_path / "a"
+        f.write_text("1")
+        base = fingerprint_inputs([f])
+        assert fingerprint_inputs([f], ["max_intron_len=5000"]) != base
+        assert fingerprint_inputs([f], ["max_intron_len=2000"]) != fingerprint_inputs(
+            [f], ["max_intron_len=5000"]
+        )
+
+    def test_extra_only_is_non_none(self):
+        assert fingerprint_inputs(None, ["max_intron_len=5000"]) is not None
+        assert fingerprint_inputs(None, ["a"]) != fingerprint_inputs(None, ["b"])
+
+
+class TestInputFingerprintResume:
+    """A completed step re-runs on resume only when its declared inputs changed."""
+
+    @staticmethod
+    def _run(tmp_path, manifest, inp, runs):
+        def fn():
+            runs.append(1)
+            (tmp_path / "out.txt").write_text("done")
+            return None
+
+        return run_orchestrated_step(
+            tmp_path, manifest, "assembly/x", fn,
+            step_dir=tmp_path / "x",
+            output_file=tmp_path / "out.txt",
+            input_files=[inp],
+        )
+
+    def test_unchanged_inputs_skip_rerun(self, tmp_path):
+        manifest = RunManifest()
+        inp = tmp_path / "in.txt"
+        inp.write_text("v1")
+        runs: list[int] = []
+        self._run(tmp_path, manifest, inp, runs)
+        self._run(tmp_path, manifest, inp, runs)
+        assert runs == [1]  # second invocation reused the cached output
+
+    def test_changed_inputs_force_rerun(self, tmp_path):
+        manifest = RunManifest()
+        inp = tmp_path / "in.txt"
+        inp.write_text("v1")
+        runs: list[int] = []
+        self._run(tmp_path, manifest, inp, runs)
+        inp.write_text("v2")  # upstream output changed
+        self._run(tmp_path, manifest, inp, runs)
+        assert runs == [1, 1]  # re-ran on the changed input
+
+    def test_legacy_record_without_fingerprint_is_reused(self, tmp_path):
+        """A completed step recorded before input_md5 existed is not treated stale."""
+        manifest = RunManifest()
+        out = tmp_path / "out.txt"
+        out.write_text("done")
+        manifest.steps["assembly/x"] = StepRecord(
+            name="assembly/x", status=StepStatus.completed,
+            output_file=str(out), input_md5=None,
+        )
+        runs: list[int] = []
+        self._run(tmp_path, manifest, tmp_path / "in.txt", runs)
+        assert runs == []  # reused despite a (missing) declared input
+
+
+class TestAssemblyStepScalars:
+    """The enforcement steps fold ``max_intron_len`` into their resume fingerprint
+    so a changed ``-M`` re-runs them (but not the expensive mappers)."""
+
+    @staticmethod
+    def _scalars(tmp_path, name, max_intron=5000):
+        cfg = AssemblyConfig(
+            genome=tmp_path / "g.fa", work_dir=tmp_path, num_cpu=2,
+            max_intron_len=max_intron,
+        )
+        spec = next(s for s in _steps_for("auto") if s.name == name)
+        return spec.scalars(cfg) if spec.scalars else None
+
+    def test_stringtie_tracks_max_intron(self, tmp_path):
+        assert self._scalars(tmp_path, "stringtie") == ["max_intron_len=5000"]
+
+    def test_combinr_tracks_max_intron(self, tmp_path):
+        assert self._scalars(tmp_path, "combinr") == ["max_intron_len=5000"]
+
+    def test_sl_cut_tracks_max_intron_and_min_fragment(self, tmp_path):
+        scalars = self._scalars(tmp_path, "sl_cut")
+        assert "max_intron_len=5000" in scalars
+        assert any(s.startswith("min_sl_fragment=") for s in scalars)
+
+    def test_mappers_do_not_track_max_intron(self, tmp_path):
+        # segemehl ignores -M natively; a scalar there would force a needless re-map.
+        for name in ("star", "map_transcripts"):
+            assert self._scalars(tmp_path, name) is None
+
+
+class TestScalarFingerprintResume:
+    """A completed step re-runs on resume when a tracked scalar input changed,
+    even though its files are byte-identical (e.g. ``-M/--max-intron``)."""
+
+    @staticmethod
+    def _run(tmp_path, manifest, scalars, runs):
+        def fn():
+            runs.append(1)
+            (tmp_path / "out.txt").write_text("done")
+            return None
+
+        return run_orchestrated_step(
+            tmp_path, manifest, "assembly/x", fn,
+            step_dir=tmp_path / "x",
+            output_file=tmp_path / "out.txt",
+            input_scalars=scalars,
+        )
+
+    def test_unchanged_scalar_skips_rerun(self, tmp_path):
+        manifest = RunManifest()
+        runs: list[int] = []
+        self._run(tmp_path, manifest, ["max_intron_len=5000"], runs)
+        self._run(tmp_path, manifest, ["max_intron_len=5000"], runs)
+        assert runs == [1]
+
+    def test_changed_scalar_forces_rerun(self, tmp_path):
+        manifest = RunManifest()
+        runs: list[int] = []
+        self._run(tmp_path, manifest, ["max_intron_len=5000"], runs)
+        self._run(tmp_path, manifest, ["max_intron_len=2000"], runs)
+        assert runs == [1, 1]
+
+
+class TestRerunClearsStaleOutput:
+    """A re-run of a completed step clears its declared output first, so step
+    functions that reuse a complete output as their own resume check (the
+    transcript mappers) actually regenerate it rather than reuse a stale file."""
+
+    @staticmethod
+    def _mapper_like(out, runs):
+        """A step fn that, like the mappers, reuses a complete output if present."""
+
+        def fn():
+            if out.exists():
+                return None
+            runs.append(1)
+            out.write_text("mapped")
+            return None
+
+        return fn
+
+    def test_forced_rerun_clears_output(self, tmp_path):
+        manifest = RunManifest()
+        out = tmp_path / "out.bam"
+        runs: list[int] = []
+        fn = self._mapper_like(out, runs)
+        run_orchestrated_step(
+            tmp_path, manifest, "assembly/x", fn,
+            step_dir=tmp_path / "x", output_file=out,
+        )
+        run_orchestrated_step(
+            tmp_path, manifest, "assembly/x", fn,
+            step_dir=tmp_path / "x", output_file=out, force=True,
+        )
+        assert runs == [1, 1]  # forced re-run cleared the BAM and re-mapped
+
+    def test_stale_input_rerun_clears_output(self, tmp_path):
+        manifest = RunManifest()
+        inp = tmp_path / "in.fasta"
+        inp.write_text("v1")
+        out = tmp_path / "out.bam"
+        runs: list[int] = []
+        fn = self._mapper_like(out, runs)
+        run_orchestrated_step(
+            tmp_path, manifest, "assembly/x", fn,
+            step_dir=tmp_path / "x", output_file=out, input_files=[inp],
+        )
+        inp.write_text("v2")  # the query the mapper reads changed
+        run_orchestrated_step(
+            tmp_path, manifest, "assembly/x", fn,
+            step_dir=tmp_path / "x", output_file=out, input_files=[inp],
+        )
+        assert runs == [1, 1]  # stale BAM cleared, so the mapper re-ran

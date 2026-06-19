@@ -159,34 +159,78 @@ def _project_genomic_to_spliced(
     return None
 
 
-def _cut_one(tx: _Tx, sites: list[AcceptorSite], min_segment: int) -> list[_Tx] | None:
-    """Split *tx* at same-strand acceptors; ``None`` if nothing to cut.
+def _long_intron_cut_offsets(
+    exons_5to3: list[tuple[int, int]], strand: str, max_intron_len: int
+) -> set[int]:
+    """Spliced "cut after base P" offsets severing every intron > *max_intron_len*.
+
+    *exons_5to3* are 1-based inclusive genomic blocks in 5'->3' order (ascending for
+    ``+``/``.``, descending for ``-``) — the order :func:`jaccard._split_transcript`
+    and :func:`jaccard._partition_exons` expect. Each gap between consecutive blocks
+    is an intron; when its genomic length exceeds the limit, cut at the cumulative
+    spliced end of the 5'-side exon, which severs the model at that intron. Returns
+    offsets in the same spliced space as the SL clips so the two unite cleanly.
+    ``max_intron_len <= 0`` disables the cut.
+    """
+    if max_intron_len <= 0 or len(exons_5to3) < 2:
+        return set()
+    cuts: set[int] = set()
+    consumed = 0
+    for i, (gstart, gend) in enumerate(exons_5to3):
+        consumed += gend - gstart + 1
+        if i + 1 < len(exons_5to3):
+            ns, ne = exons_5to3[i + 1]
+            intron_len = (ns - gend - 1) if strand != "-" else (gstart - ne - 1)
+            if intron_len > max_intron_len:
+                cuts.add(consumed)
+    return cuts
+
+
+def _count_long_introns(tx: _Tx, max_intron_len: int) -> int:
+    """Number of introns in *tx* longer than *max_intron_len* (genomic gaps)."""
+    if max_intron_len <= 0:
+        return 0
+    ex = tx.exons  # start-sorted ascending
+    return sum(
+        1 for i in range(len(ex) - 1) if ex[i + 1][0] - ex[i][1] - 1 > max_intron_len
+    )
+
+
+def _cut_one(
+    tx: _Tx, sites: list[AcceptorSite], min_segment: int, *, max_intron_len: int
+) -> list[_Tx] | None:
+    """Split *tx* at same-strand SL acceptors and at over-long introns; ``None`` if
+    nothing to cut.
 
     A ``.``-strand transcript is oriented by the acceptors when they agree on a
-    single strand (the SL imposes strand); conflicting strands leave it unchanged.
+    single strand (the SL imposes strand); conflicting strands skip the SL cut. The
+    max-intron cut is strand-agnostic (a genomic gap is severed regardless), so it
+    applies even with no usable SL acceptor — the two cut sets unite in one
+    partition pass.
     """
-    if not sites:
-        return None
-    if tx.strand in ("+", "-"):
-        strand = tx.strand
-        usable = [s for s in sites if s.strand == tx.strand]
-    else:
-        strands = {s.strand for s in sites}
-        if len(strands) != 1:
-            return None
-        strand = next(iter(strands))
-        usable = sites
-    if not usable:
-        return None
+    usable: list[AcceptorSite] = []
+    strand = tx.strand
+    if sites:
+        if tx.strand in ("+", "-"):
+            usable = [s for s in sites if s.strand == tx.strand]
+        else:
+            strands = {s.strand for s in sites}
+            if len(strands) == 1:
+                strand = next(iter(strands))
+                usable = sites
+            # conflicting SL strands: no SL-imposed strand, but long introns still cut
 
     exons_5to3 = tx.exons if strand != "-" else list(reversed(tx.exons))
     total_len = sum(e - s + 1 for s, e in tx.exons)
+
     clips: set[int] = set()
     for site in usable:
         off = _project_genomic_to_spliced(exons_5to3, strand, site.pos)
         # Cut *before* the acceptor base so the downstream piece starts at it.
         if off is not None and 1 < off <= total_len:
             clips.add(off - 1)
+    clips |= _long_intron_cut_offsets(exons_5to3, strand, max_intron_len)
+
     valid = sorted(c for c in clips if 0 < c < total_len)
     if not valid:
         return None
@@ -198,32 +242,42 @@ def _cut_one(tx: _Tx, sites: list[AcceptorSite], min_segment: int) -> list[_Tx] 
 
 
 def cut_models_at_sl(
-    gff_or_gtf: str | Path, sites: list[AcceptorSite], out_gff: str | Path, *, min_segment: int
-) -> int:
-    """Cut every transcript in *gff_or_gtf* at its same-strand SL acceptors.
+    gff_or_gtf: str | Path,
+    sites: list[AcceptorSite],
+    out_gff: str | Path,
+    *,
+    min_segment: int,
+    max_intron_len: int,
+) -> tuple[int, int]:
+    """Cut every transcript in *gff_or_gtf* at SL acceptors and over-long introns.
 
     Streams: reads one transcript model, cuts it, writes the result, and moves on —
-    no full model list is held. Transcripts with no applicable acceptor pass through
-    unchanged. Returns the number of transcripts that were cut.
+    no full model list is held. Transcripts with no applicable acceptor *and* no
+    over-long intron pass through unchanged. Returns
+    ``(transcripts_cut, over_long_introns_severed)``.
     """
     by_chrom: dict[str, list[AcceptorSite]] = {}
     for site in sites:
         by_chrom.setdefault(site.chrom, []).append(site)
 
     n_cut = 0
+    n_long = 0
     n_conflict = 0
     with open(out_gff, "w") as fh:
         fh.write("##gff-version 3\n")
         for tx in _iter_transcript_models(gff_or_gtf):
             span_lo, span_hi = tx.exons[0][0], tx.exons[-1][1]
             relevant = [s for s in by_chrom.get(tx.chrom, []) if span_lo <= s.pos <= span_hi]
-            result = _cut_one(tx, relevant, min_segment)
+            long_here = _count_long_introns(tx, max_intron_len)
+            result = _cut_one(tx, relevant, min_segment, max_intron_len=max_intron_len)
             if result is None:
                 # A multi-exon, stranded transcript whose only in-span SL acceptors
-                # sit on the opposite strand: the splice-derived strand and the SL
-                # disagree. Trust the introns — keep the strand, skip the cut.
+                # sit on the opposite strand (and no over-long intron forced a cut):
+                # the splice-derived strand and the SL disagree. Trust the introns —
+                # keep the strand, skip the cut.
                 if (
-                    relevant and len(tx.exons) > 1 and tx.strand in ("+", "-")
+                    relevant and long_here == 0 and len(tx.exons) > 1
+                    and tx.strand in ("+", "-")
                     and all(s.strand != tx.strand for s in relevant)
                 ):
                     n_conflict += 1
@@ -232,22 +286,29 @@ def cut_models_at_sl(
                 for piece in result:
                     _write_tx(fh, piece)
                 n_cut += 1
+                n_long += long_here
     if n_conflict:
         log.warning(
             "%d multi-exon transcript(s) had SL acceptors only on the opposite "
             "strand; kept the splice-derived strand and skipped those cuts.",
             n_conflict,
         )
-    return n_cut
+    return n_cut, n_long
 
 
 def run_sl_cut(config: AssemblyConfig) -> None:
-    """Cut the (strand-corrected) StringTie and de novo transcript models at SL acceptors.
+    """Cut StringTie and de novo transcript models at SL acceptors and over-long introns.
 
     Inputs come from the ``strand_correct`` step: prefer its ``*.stranded.gff3``
     (homology-corrected strands), falling back to the raw models when correction was
     a no-op (stranded library or no ``--uniprot``). The de novo BAM→GFF3 conversion
     now lives in that step (:mod:`eukan.assembly.strand_correction`).
+
+    Both model sources stream through here, so this is also where the
+    ``max_intron_len`` limit is hard-imposed on the transcript models: any intron
+    longer than it splits the model into separate genes (the de novo segemehl path
+    has no native intron bound). The resume fingerprint folds in ``max_intron_len``
+    (see :mod:`eukan.assembly.pipeline`), so tightening ``-M`` re-runs this step.
     """
     wd = config.work_dir
     acc_path = wd / Artifact.SL_ACCEPTORS.value
@@ -266,5 +327,11 @@ def run_sl_cut(config: AssemblyConfig) -> None:
         if not src.exists():
             continue
         out = wd / out_name
-        n_cut = cut_models_at_sl(src, sites, out, min_segment=min_segment)
-        log.info("SL cut %s -> %s (%d transcripts cut).", src.name, out.name, n_cut)
+        n_cut, n_long = cut_models_at_sl(
+            src, sites, out,
+            min_segment=min_segment, max_intron_len=config.max_intron_len,
+        )
+        log.info(
+            "SL + max-intron cut %s -> %s (%d transcripts cut, %d over-long introns severed).",
+            src.name, out.name, n_cut, n_long,
+        )

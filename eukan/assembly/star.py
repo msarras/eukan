@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
 from eukan.assembly.align_hints import generate_rnaseq_hints
 from eukan.exceptions import ExternalToolError
+from eukan.infra.artifacts import Artifact
 from eukan.infra.logging import get_logger
 from eukan.infra.runner import run_cmd
 from eukan.settings import AssemblyConfig
 
 log = get_logger(__name__)
+
+# Non-canonical-splice verdict (softclip_diagnostic_summary.json →
+# verdict.non_canonical_splice.call) at which transcript→genome mapping switches
+# from STARlong to splice-agnostic segemehl: STARlong's canonical-tuned seeding
+# under-maps transcripts whose introns are mostly non-canonical.
+_SEGEMEHL_NON_CANONICAL_CALL = "EXTENSIVE"
 
 # STAR resource/index tuning for typical small eukaryotic genomes.
 _STAR_SA_INDEX_NBASES = "3"                 # suffix-array pre-index size (small genomes)
@@ -109,6 +117,111 @@ def map_reads(config: AssemblyConfig) -> None:
 
     # Cleanup build index (large)
     shutil.rmtree(index_dir, ignore_errors=True)
+
+
+def map_reads_auto(config: AssemblyConfig) -> None:
+    """STAR read mapping, escalating to a segemehl re-map on extensive non-canonical splicing.
+
+    STAR runs first — it is fast and it produces the soft-clip / splice diagnostic.
+    If that diagnostic calls non-canonical splicing ``EXTENSIVE``, the reads are
+    re-mapped with splice-agnostic segemehl, and that BAM becomes the one StringTie,
+    the RNA-seq hints, and SL read-side detection consume (resolved via
+    ``config.aligner_bam``): STAR's canonical-biased alignment otherwise mis-places
+    reads across the non-canonical junctions, so the genome-guided assembly built on
+    it is unreliable. ``--aligner star`` skips the escalation; ``--aligner segemehl``
+    maps with segemehl from the start.
+    """
+    from eukan.assembly.segemehl import _BAM as _SEGEMEHL_READ_BAM
+    from eukan.assembly.segemehl import map_reads_segemehl
+
+    map_reads(config)
+
+    seg_bam = config.work_dir / _SEGEMEHL_READ_BAM
+    if _non_canonical_call(config.work_dir) == _SEGEMEHL_NON_CANONICAL_CALL:
+        log.warning(
+            "Non-canonical splicing EXTENSIVE — re-mapping the reads with segemehl "
+            "(splice-agnostic) so genome-guided assembly and hints are not biased by "
+            "STAR's canonical-splice alignment. Pass --aligner star to skip this."
+        )
+        map_reads_segemehl(config)
+    elif seg_bam.exists():
+        # A prior escalation's segemehl BAM is stale now that this run is
+        # canonical-dominant; drop it so config.aligner_bam falls back to STAR.
+        seg_bam.unlink(missing_ok=True)
+        (config.work_dir / f"{_SEGEMEHL_READ_BAM}.bai").unlink(missing_ok=True)
+
+
+def _non_canonical_call(work_dir: Path) -> str | None:
+    """The ``non_canonical_splice`` verdict from the soft-clip diagnostic, if any.
+
+    Reads ``softclip_diagnostic_summary.json`` (written after read mapping when
+    ``--diagnose-softclips`` is on). Returns the call string
+    (``EXTENSIVE`` / ``MODERATE`` / ``ABSENT``) or ``None`` when the file is
+    absent or unreadable.
+    """
+    path = work_dir / Artifact.SOFTCLIP_DIAGNOSTIC.value
+    try:
+        data = json.loads(path.read_text())
+        return data["verdict"]["non_canonical_splice"]["call"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _prefer_segemehl_for_transcripts(config: AssemblyConfig) -> bool:
+    """True when transcript→genome mapping should use segemehl rather than STARlong.
+
+    segemehl is chosen when the read aligner is explicitly segemehl, or when the
+    soft-clip diagnostic called non-canonical splicing ``EXTENSIVE`` — both signal
+    a splice landscape STARlong's canonical seeding handles poorly.
+    """
+    if config.aligner == "segemehl":
+        return True
+    return _non_canonical_call(config.work_dir) == _SEGEMEHL_NON_CANONICAL_CALL
+
+
+def map_transcripts(config: AssemblyConfig) -> None:
+    """Map de novo transcripts to the genome, routing on the splice landscape.
+
+    Uses splice-agnostic segemehl ``-S`` when non-canonical splicing is extensive
+    (or ``--aligner segemehl`` was chosen), else STARlong (with segemehl as a
+    per-set fallback when STARlong errors or maps nothing). The output BAMs and
+    downstream contract are identical either way.
+    """
+    if _prefer_segemehl_for_transcripts(config):
+        log.info(
+            "Mapping de novo transcripts with segemehl -S (non-canonical splicing "
+            "extensive or --aligner segemehl); STARlong skipped."
+        )
+        _map_transcripts_segemehl(config)
+    else:
+        map_transcripts_star(config)
+
+
+def _map_transcripts_segemehl(config: AssemblyConfig) -> None:
+    """segemehl ``-S`` transcript→genome mapping for every de novo set present.
+
+    The segemehl primary path (vs. the STARlong-failure fallback): no STAR index
+    is built. Per-set resume is handled inside
+    :func:`segemehl.map_one_transcript_set_segemehl` (a complete BAM is reused).
+    """
+    from eukan.assembly.segemehl import (
+        _TRANSCRIPT_SETS,
+        _resolve_query,
+        map_one_transcript_set_segemehl,
+    )
+
+    wd = config.work_dir
+    sets = [
+        (query, out_bam)
+        for query_name, out_bam in _TRANSCRIPT_SETS
+        if (query := _resolve_query(wd, query_name)).exists() and query.stat().st_size > 0
+    ]
+    if not sets:
+        log.warning("No assembled transcripts found to map; skipping.")
+        return
+    for query, out_bam in sets:
+        log.info("segemehl mapping transcripts %s -> %s ...", query.name, out_bam)
+        map_one_transcript_set_segemehl(config, query, out_bam)
 
 
 def map_transcripts_star(config: AssemblyConfig) -> None:

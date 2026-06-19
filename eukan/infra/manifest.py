@@ -79,6 +79,11 @@ class StepRecord(BaseModel):
     duration_seconds: float | None = None
     output_file: str | None = None
     output_md5: str | None = None
+    # Fingerprint of the step's declared *inputs* at the time it last completed.
+    # Lets resume detect "inputs changed since this step ran" and re-execute,
+    # instead of reusing a stale output (see steps.fingerprint_inputs). ``None``
+    # for steps that declare no inputs or were recorded before this field existed.
+    input_md5: str | None = None
     error: str | None = None
 
 

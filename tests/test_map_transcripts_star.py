@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from eukan.assembly import segemehl, star
+from eukan.infra.artifacts import Artifact
 from eukan.settings import AssemblyConfig
 
 
@@ -110,3 +112,129 @@ def test_no_assemblies_is_noop(tmp_path, monkeypatch):
     cmds = _mock(monkeypatch, tmp_path)
     star.map_transcripts_star(_config(tmp_path))
     assert cmds == []
+
+
+def _write_verdict(tmp_path, call):
+    (tmp_path / Artifact.SOFTCLIP_DIAGNOSTIC.value).write_text(
+        json.dumps({"verdict": {"non_canonical_splice": {"call": call}}})
+    )
+
+
+def _record_dispatch(monkeypatch):
+    chosen: list[str] = []
+    monkeypatch.setattr(star, "map_transcripts_star", lambda _c: chosen.append("starlong"))
+    monkeypatch.setattr(star, "_map_transcripts_segemehl", lambda _c: chosen.append("segemehl"))
+    return chosen
+
+
+class TestMapTranscriptsDispatch:
+    """``map_transcripts`` routes to STARlong or segemehl on the splice landscape."""
+
+    def test_default_uses_starlong(self, tmp_path, monkeypatch):
+        chosen = _record_dispatch(monkeypatch)
+        star.map_transcripts(_config(tmp_path))
+        assert chosen == ["starlong"]
+
+    def test_aligner_segemehl_uses_segemehl(self, tmp_path, monkeypatch):
+        chosen = _record_dispatch(monkeypatch)
+        star.map_transcripts(_config(tmp_path, aligner="segemehl"))
+        assert chosen == ["segemehl"]
+
+    def test_extensive_non_canonical_uses_segemehl(self, tmp_path, monkeypatch):
+        _write_verdict(tmp_path, "EXTENSIVE")
+        chosen = _record_dispatch(monkeypatch)
+        star.map_transcripts(_config(tmp_path))
+        assert chosen == ["segemehl"]
+
+    def test_moderate_non_canonical_uses_starlong(self, tmp_path, monkeypatch):
+        """Only EXTENSIVE routes to segemehl; MODERATE stays on STARlong."""
+        _write_verdict(tmp_path, "MODERATE")
+        chosen = _record_dispatch(monkeypatch)
+        star.map_transcripts(_config(tmp_path))
+        assert chosen == ["starlong"]
+
+    def test_unreadable_verdict_uses_starlong(self, tmp_path, monkeypatch):
+        (tmp_path / Artifact.SOFTCLIP_DIAGNOSTIC.value).write_text("{not json")
+        chosen = _record_dispatch(monkeypatch)
+        star.map_transcripts(_config(tmp_path))
+        assert chosen == ["starlong"]
+
+
+class TestReadMappingEscalation:
+    """``map_reads_auto`` re-maps the reads with segemehl when non-canonical EXTENSIVE."""
+
+    def _patch(self, monkeypatch, verdict=None):
+        calls: list[str] = []
+
+        def fake_star(config):
+            calls.append("star")
+            if verdict is not None:
+                _write_verdict(config.work_dir, verdict)
+
+        monkeypatch.setattr(star, "map_reads", fake_star)
+        # map_reads_segemehl is imported lazily from the segemehl module, so patch
+        # it there (the function-local import resolves the attribute at call time).
+        monkeypatch.setattr(
+            segemehl, "map_reads_segemehl", lambda config: calls.append("segemehl")
+        )
+        return calls
+
+    def test_escalates_on_extensive(self, tmp_path, monkeypatch):
+        calls = self._patch(monkeypatch, verdict="EXTENSIVE")
+        star.map_reads_auto(_config(tmp_path))
+        assert calls == ["star", "segemehl"]
+
+    def test_no_escalation_on_moderate(self, tmp_path, monkeypatch):
+        calls = self._patch(monkeypatch, verdict="MODERATE")
+        star.map_reads_auto(_config(tmp_path))
+        assert calls == ["star"]
+
+    def test_no_escalation_without_verdict(self, tmp_path, monkeypatch):
+        calls = self._patch(monkeypatch, verdict=None)
+        star.map_reads_auto(_config(tmp_path))
+        assert calls == ["star"]
+
+    def test_stale_segemehl_bam_dropped_when_not_extensive(self, tmp_path, monkeypatch):
+        from eukan.assembly.segemehl import _BAM as seg
+
+        (tmp_path / seg).write_text("stale")
+        (tmp_path / f"{seg}.bai").write_text("stale")
+        calls = self._patch(monkeypatch, verdict="MODERATE")
+        star.map_reads_auto(_config(tmp_path))
+        assert calls == ["star"]
+        assert not (tmp_path / seg).exists()  # stale escalation BAM cleared
+        assert not (tmp_path / f"{seg}.bai").exists()
+
+
+class TestSegemehlPrimaryPath:
+    """The segemehl-primary transcript path maps each set, no STAR index built."""
+
+    def test_maps_each_set(self, tmp_path, monkeypatch):
+        (tmp_path / "rnaspades.fasta").write_text(">t\nACGTACGT\n")
+        called: list[tuple[str, str]] = []
+        monkeypatch.setattr(
+            segemehl, "map_one_transcript_set_segemehl",
+            lambda config, query, out_bam: called.append((query.name, out_bam)),
+        )
+        star._map_transcripts_segemehl(_config(tmp_path))
+        assert called == [("rnaspades.fasta", "rnaspades.genome.bam")]
+
+    def test_prefers_jaccard_clipped_query(self, tmp_path, monkeypatch):
+        (tmp_path / "rnaspades.fasta").write_text(">t\nACGT\n")
+        (tmp_path / "rnaspades.jaccard.fasta").write_text(">t\nACGTACGT\n")
+        called: list[str] = []
+        monkeypatch.setattr(
+            segemehl, "map_one_transcript_set_segemehl",
+            lambda config, query, out_bam: called.append(query.name),
+        )
+        star._map_transcripts_segemehl(_config(tmp_path))
+        assert called == ["rnaspades.jaccard.fasta"]
+
+    def test_noop_without_transcripts(self, tmp_path, monkeypatch):
+        called: list[int] = []
+        monkeypatch.setattr(
+            segemehl, "map_one_transcript_set_segemehl",
+            lambda config, query, out_bam: called.append(1),
+        )
+        star._map_transcripts_segemehl(_config(tmp_path))
+        assert called == []
