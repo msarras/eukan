@@ -47,10 +47,10 @@ dependencies:
   - samtools>=1.20
   - segemehl>=0.3.4
   - snap
-  - spades>=4.2
+  - spades=4.2.0=haf24da9_0
   - spaln=3.0.6=pl5321hdcf5f25_0
   - star=2.7.11b=h43eeafb_3
-  - stringtie>=3.0
+  - stringtie=2.2.1=h3198e80_0
   - table2asn>=1.28
   - trf>=4.09
 
