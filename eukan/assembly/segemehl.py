@@ -188,11 +188,11 @@ def map_reads_segemehl(config: AssemblyConfig) -> None:
 # ---------------------------------------------------------------------------
 # Transcript -> genome mapping config (consumed by star.map_transcripts_star)
 # ---------------------------------------------------------------------------
-# The de novo transcripts are mapped to the genome by STAR — ungapped + Local
-# soft-clip (eukan.assembly.star.map_transcripts_star) — NOT segemehl: split
-# mapping (`-S`) both split the spliced leader to the SL-RNA locus and exploded
-# memory, while segemehl without `-S` emits no soft-clips for SL detection. These
-# (query FASTA, output BAM) pairs and the jaccard-sibling resolver are shared.
+# De novo transcripts are mapped to the genome SPLICED (bounded intron + Local
+# soft-clip) by STARlong (eukan.assembly.star.map_transcripts_star), with segemehl
+# `-S` (`-H 1`, see map_one_transcript_set_segemehl) as the fallback when STARlong
+# fails/under-maps. These (query FASTA, output BAM) pairs and the jaccard-sibling
+# resolver are shared.
 _TRANSCRIPT_SETS: tuple[tuple[str, str], ...] = (
     ("rnaspades.fasta", "rnaspades.genome.bam"),
 )
@@ -208,3 +208,52 @@ def _resolve_query(wd: Path, query_name: str) -> Path:
     """
     clipped = wd / query_name.replace(".fasta", ".jaccard.fasta")
     return clipped if clipped.exists() and clipped.stat().st_size > 0 else wd / query_name
+
+
+_TX_INDEX = "segemehl_tx.idx"
+_TX_SPLITS_BASE = "segemehl_tx_splits"
+
+
+def map_one_transcript_set_segemehl(config: AssemblyConfig, query: Path, out_bam: str) -> None:
+    """Spliced fallback for transcript->genome mapping (used when STARlong fails).
+
+    segemehl ``-S`` natively splits long transcripts at introns, recovering the
+    splice structure STAR can miss on long queries. ``-H 1`` (report only the best
+    alignment) bounds the split-DP memory that ``-H 0`` blew past on this box; we
+    then drop unmapped reads and coordinate-sort/index like the read path. Unmapped
+    transcripts are not captured here — the STARlong primary path does that.
+    """
+    wd = config.work_dir
+    final = wd / out_bam
+    if _bam_is_complete(final):
+        log.info("Reusing %s; skipping segemehl transcript mapping.", final.name)
+        return
+
+    index = wd / _TX_INDEX
+    if not index.exists():
+        run_cmd(["segemehl.x", "-x", str(index), "-d", str(config.genome)], cwd=wd)
+    unsorted = wd / f"{out_bam}.unsorted.bam"
+    log.warning(
+        "Mapping %s with segemehl -S (-H 1) — memory-hungry; watch RSS on a "
+        "low-memory box.", query.name,
+    )
+    run_cmd(
+        [
+            "segemehl.x",
+            "-H", "1",
+            "-i", str(index),
+            "-d", str(config.genome),
+            "-q", str(query),
+            "-S", str(wd / _TX_SPLITS_BASE),
+            "-t", str(config.num_cpu),
+            "-b",
+            "-o", str(unsorted),
+        ],
+        cwd=wd,
+    )
+    index.unlink(missing_ok=True)
+    for suffix in _SPLITS_SUFFIXES:
+        (wd / f"{_TX_SPLITS_BASE}{suffix}").unlink(missing_ok=True)
+    _coordinate_sort_and_filter(unsorted, out_bam, wd, config.num_cpu)
+    run_cmd(["samtools", "index", out_bam], cwd=wd)
+    unsorted.unlink(missing_ok=True)

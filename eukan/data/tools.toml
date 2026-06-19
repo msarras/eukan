@@ -67,7 +67,7 @@ conda_path_dirs = ["opt/genemark"]
 [diamond]
 binary = "diamond"
 version_cmd = ["diamond", "version"]
-required_by = ["annotate"]
+required_by = ["assemble", "annotate"]
 conda_package = "diamond"
 
 [samtools]

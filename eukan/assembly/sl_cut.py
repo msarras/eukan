@@ -211,6 +211,7 @@ def cut_models_at_sl(
         by_chrom.setdefault(site.chrom, []).append(site)
 
     n_cut = 0
+    n_conflict = 0
     with open(out_gff, "w") as fh:
         fh.write("##gff-version 3\n")
         for tx in _iter_transcript_models(gff_or_gtf):
@@ -218,36 +219,52 @@ def cut_models_at_sl(
             relevant = [s for s in by_chrom.get(tx.chrom, []) if span_lo <= s.pos <= span_hi]
             result = _cut_one(tx, relevant, min_segment)
             if result is None:
+                # A multi-exon, stranded transcript whose only in-span SL acceptors
+                # sit on the opposite strand: the splice-derived strand and the SL
+                # disagree. Trust the introns — keep the strand, skip the cut.
+                if (
+                    relevant and len(tx.exons) > 1 and tx.strand in ("+", "-")
+                    and all(s.strand != tx.strand for s in relevant)
+                ):
+                    n_conflict += 1
                 _write_tx(fh, tx)
             else:
                 for piece in result:
                     _write_tx(fh, piece)
                 n_cut += 1
+    if n_conflict:
+        log.warning(
+            "%d multi-exon transcript(s) had SL acceptors only on the opposite "
+            "strand; kept the splice-derived strand and skipped those cuts.",
+            n_conflict,
+        )
     return n_cut
 
 
 def run_sl_cut(config: AssemblyConfig) -> None:
-    """Cut the StringTie GTF and de novo transcript→genome models at SL acceptors."""
+    """Cut the (strand-corrected) StringTie and de novo transcript models at SL acceptors.
+
+    Inputs come from the ``strand_correct`` step: prefer its ``*.stranded.gff3``
+    (homology-corrected strands), falling back to the raw models when correction was
+    a no-op (stranded library or no ``--uniprot``). The de novo BAM→GFF3 conversion
+    now lives in that step (:mod:`eukan.assembly.strand_correction`).
+    """
     wd = config.work_dir
     acc_path = wd / Artifact.SL_ACCEPTORS.value
     sites = load_sl_acceptors(acc_path) if acc_path.exists() else []
     min_segment = config.min_sl_fragment
 
-    stringtie = wd / "stringtie.gtf"
-    if stringtie.exists():
-        out = wd / "stringtie.sl_cut.gff3"
-        n_cut = cut_models_at_sl(stringtie, sites, out, min_segment=min_segment)
-        log.info("SL cut stringtie.gtf -> %s (%d transcripts cut).", out.name, n_cut)
-
-    for bam_name in _DENOVO_BAMS:
-        bam_path = wd / bam_name
-        if not bam_path.exists():
+    for stranded, raw, out_name in (
+        ("stringtie.stranded.gff3", "stringtie.gtf", "stringtie.sl_cut.gff3"),
+        (
+            "rnaspades.genome.stranded.gff3",
+            "rnaspades.genome.gff3",
+            "rnaspades.genome.sl_cut.gff3",
+        ),
+    ):
+        src = wd / stranded if (wd / stranded).exists() else wd / raw
+        if not src.exists():
             continue
-        stem = bam_name[: -len(_GENOME_BAM_SUFFIX)]
-        gff = wd / f"{stem}.genome.gff3"
-        n_models = bam_to_transcript_gff3(bam_path, gff, source=stem)
-        out = wd / f"{stem}.genome.sl_cut.gff3"
-        n_cut = cut_models_at_sl(gff, sites, out, min_segment=min_segment)
-        log.info(
-            "SL cut %s (%d models) -> %s (%d cut).", gff.name, n_models, out.name, n_cut
-        )
+        out = wd / out_name
+        n_cut = cut_models_at_sl(src, sites, out, min_segment=min_segment)
+        log.info("SL cut %s -> %s (%d transcripts cut).", src.name, out.name, n_cut)

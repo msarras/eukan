@@ -1,10 +1,10 @@
-"""Unit tests for STAR transcript->genome mapping (command construction)."""
+"""Unit tests for transcript->genome mapping (STARlong-spliced command construction)."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from eukan.assembly import star
+from eukan.assembly import segemehl, star
 from eukan.settings import AssemblyConfig
 
 
@@ -13,8 +13,12 @@ def _config(tmp_path, **kw):
     return AssemblyConfig(genome=tmp_path / "genome.fa", work_dir=tmp_path, num_cpu=4, **kw)
 
 
-def _mock(monkeypatch, tmp_path):
-    """Record run_cmd calls; materialize STAR's sorted BAM so the rename succeeds."""
+def _mock(monkeypatch, tmp_path, *, mapped: int = 1):
+    """Record run_cmd calls; materialize the mapper's sorted BAM so the rename succeeds.
+
+    *mapped* stands in for the post-mapping ``_count_mapped`` so the segemehl fallback
+    fires only when we want it to (mapped == 0).
+    """
     cmds: list[list[str]] = []
 
     def fake(cmd, **kw):
@@ -24,6 +28,7 @@ def _mock(monkeypatch, tmp_path):
             (tmp_path / f"{prefix}Aligned.sortedByCoord.out.bam").write_text("bam")
 
     monkeypatch.setattr(star, "run_cmd", fake)
+    monkeypatch.setattr(star, "_count_mapped", lambda _p: mapped)
     return cmds
 
 
@@ -43,15 +48,16 @@ def test_maps_de_novo_assembly(tmp_path, monkeypatch):
     assert (tmp_path / "rnaspades.genome.bam").exists()
 
 
-def test_star_flags_ungapped_local(tmp_path, monkeypatch):
+def test_starlong_flags_spliced_local(tmp_path, monkeypatch):
     (tmp_path / "rnaspades.fasta").write_text(">t\nACGTACGT\n")
     cmds = _mock(monkeypatch, tmp_path)
 
-    star.map_transcripts_star(_config(tmp_path))
+    star.map_transcripts_star(_config(tmp_path, max_intron_len=5000))
 
     (cmd,) = _map_cmds(cmds)
-    assert cmd[cmd.index("--alignEndsType") + 1] == "Local"   # soft-clip the SL
-    assert cmd[cmd.index("--alignIntronMax") + 1] == "1"      # ungapped, no SL split
+    assert cmd[0] == "STARlong"                                 # long-read STAR build
+    assert cmd[cmd.index("--alignEndsType") + 1] == "Local"     # soft-clip the SL
+    assert cmd[cmd.index("--alignIntronMax") + 1] == "5000"     # spliced, bounded intron
     assert cmd[cmd.index("--outReadsUnmapped") + 1] == "Fastx"
     assert ["samtools", "index", "rnaspades.genome.bam"] in cmds
 
@@ -72,15 +78,32 @@ def test_unmapped_captured(tmp_path, monkeypatch):
     (tmp_path / "rnaspades.fasta").write_text(">t\nACGT\n")
 
     def fake(cmd, **kw):
-        if cmd[0] == "STAR" and "--outFileNamePrefix" in cmd:
+        if cmd[0] in ("STAR", "STARlong") and "--outFileNamePrefix" in cmd:
             p = cmd[cmd.index("--outFileNamePrefix") + 1]
             (tmp_path / f"{p}Aligned.sortedByCoord.out.bam").write_text("bam")
             (tmp_path / f"{p}Unmapped.out.mate1").write_text(">u\nACGT\n")
 
     monkeypatch.setattr(star, "run_cmd", fake)
+    monkeypatch.setattr(star, "_count_mapped", lambda _p: 1)
     star.map_transcripts_star(_config(tmp_path))
 
     assert (tmp_path / "rnaspades.unmapped_transcripts.fasta").exists()
+
+
+def test_segemehl_fallback_on_zero_map(tmp_path, monkeypatch):
+    """STARlong mapping nothing falls back to segemehl -S for that transcript set."""
+    (tmp_path / "rnaspades.fasta").write_text(">t\nACGTACGT\n")
+    _mock(monkeypatch, tmp_path, mapped=0)
+
+    called: list[str] = []
+    monkeypatch.setattr(
+        segemehl, "map_one_transcript_set_segemehl",
+        lambda config, query, out_bam: called.append(out_bam),
+    )
+
+    star.map_transcripts_star(_config(tmp_path))
+
+    assert called == ["rnaspades.genome.bam"]
 
 
 def test_no_assemblies_is_noop(tmp_path, monkeypatch):

@@ -107,6 +107,7 @@ class TestAssemblyForceStepsFromRunFlags:
     _ALL_KEYS: ClassVar[list[str]] = [
         "assembly/star", "assembly/stringtie",
         "assembly/rnaspades", "assembly/jaccard", "assembly/map_transcripts",
+        "assembly/strand_correct",
         "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
     ]
 
@@ -133,6 +134,17 @@ class TestAssemblyForceStepsFromRunFlags:
     def test_run_sl_steps_alone(self):
         assert assembly_force_steps_from_run_flags(run_sl_detect=True) == ["assembly/sl_detect"]
         assert assembly_force_steps_from_run_flags(run_sl_cut=True) == ["assembly/sl_cut"]
+
+    def test_run_strand_correct_alone(self):
+        assert assembly_force_steps_from_run_flags(run_strand_correct=True) == [
+            "assembly/strand_correct"
+        ]
+
+    def test_run_map_transcripts_also_forces_strand_correct(self):
+        """The new spliced BAM invalidates the converted/corrected models."""
+        assert assembly_force_steps_from_run_flags(run_map_transcripts=True) == [
+            "assembly/map_transcripts", "assembly/strand_correct"
+        ]
 
     def test_run_star_with_force_takes_run_flag(self):
         """--run-star --force scopes to star; --run-X takes precedence over --force."""

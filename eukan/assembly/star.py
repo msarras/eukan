@@ -112,21 +112,21 @@ def map_reads(config: AssemblyConfig) -> None:
 
 
 def map_transcripts_star(config: AssemblyConfig) -> None:
-    """Map de novo assembled transcripts to the genome UNGAPPED with STAR.
+    """Map de novo assembled transcripts to the genome SPLICED with STARlong.
 
-    The transcripts are the spliced product of ungapped reads, so they are mapped
-    with ``--alignIntronMax 1`` (no introns/splits — the spliced leader is not
-    split off to the SL-RNA locus, and memory stays bounded) and
-    ``--alignEndsType Local`` so the leader SOFT-CLIPS at the trans-splice acceptor
-    — the signal SL detection (:mod:`eukan.assembly.sl_acceptors`) keys on.
-    (segemehl ``-S`` both split the leader away and exploded memory; segemehl
-    without ``-S`` emits no soft-clips at all, so STAR ungapped-Local is the only
-    aligner that is OOM-safe *and* preserves the clip.)
+    Mapped with ``--alignIntronMax <max_intron_len>`` so cis-introns appear as
+    ``N`` gaps — the splice structure :mod:`eukan.assembly.strand_correction` reads
+    to homology-correct transcript strand — and ``--alignEndsType Local`` so the
+    spliced leader still SOFT-CLIPS at the trans-splice acceptor (the SL-RNA locus
+    is distal, not bridgeable within the bounded intron, so it is not split off),
+    the signal SL detection (:mod:`eukan.assembly.sl_acceptors`) keys on. STARlong
+    is the long-read STAR build, appropriate for long transcript queries; on failure
+    or a zero-map result it falls back to segemehl ``-S`` (``-H 1``, memory-bounded).
 
     Produces one coordinate-sorted, indexed ``<stem>.genome.bam`` per de novo
     assembly present, with unmapped transcripts saved to
-    ``<stem>.unmapped_transcripts.fasta``. Long transcripts fall back to STARlong.
-    Per-query resume: a BAM passing ``samtools quickcheck`` is left untouched.
+    ``<stem>.unmapped_transcripts.fasta``. Per-query resume: a BAM passing
+    ``samtools quickcheck`` is left untouched.
     """
     from eukan.assembly.jaccard import _chr_bin_nbits, _genome_stats, _sa_index_nbases
     from eukan.assembly.segemehl import _GENOME_BAM_SUFFIX, _TRANSCRIPT_SETS, _resolve_query
@@ -167,11 +167,23 @@ def map_transcripts_star(config: AssemblyConfig) -> None:
         shutil.rmtree(index_dir, ignore_errors=True)
 
 
+def _count_mapped(bam_path: Path) -> int:
+    """Mapped-read count from the BAM index (BAM must already be indexed)."""
+    import pysam
+
+    with pysam.AlignmentFile(str(bam_path), "rb") as bam:
+        return bam.mapped
+
+
 def _star_map_one_transcript_set(
     config: AssemblyConfig, index_dir: Path, query: Path, out_bam: str, bam_suffix: str
 ) -> None:
-    """Map one transcript FASTA to the genome index → sorted, indexed *out_bam*."""
-    from eukan.assembly.segemehl import _bam_is_complete
+    """Spliced-map one transcript FASTA → sorted, indexed *out_bam* (STARlong).
+
+    Falls back to segemehl ``-S`` when STARlong errors or maps nothing — STARlong's
+    short-read-tuned seeding can fail on long, multi-intron transcripts.
+    """
+    from eukan.assembly.segemehl import _bam_is_complete, map_one_transcript_set_segemehl
 
     wd = config.work_dir
     final = wd / out_bam
@@ -182,14 +194,14 @@ def _star_map_one_transcript_set(
     stem = out_bam[: -len(bam_suffix)]
     prefix = f"startx_{stem}_"
     zcat_args = ["--readFilesCommand", "zcat"] if _is_gzipped(query) else []
-    star_cmd = [
-        "STAR",
+    intron_max = str(config.max_intron_len) if config.max_intron_len else "1"
+    starlong_cmd = [
+        "STARlong",
         "--runThreadN", str(config.num_cpu),
         "--genomeDir", str(index_dir),
         "--readFilesIn", str(query),
-        "--alignEndsType", "Local",   # soft-clip the spliced leader at the acceptor
-        "--alignIntronMax", "1",      # ungapped: no intron/SL split, bounded memory
-        "--alignMatesGapMax", "1",
+        "--alignEndsType", "Local",        # soft-clip the spliced leader at the acceptor
+        "--alignIntronMax", intron_max,    # spliced: recover cis-introns for strand inference
         "--outSAMtype", "BAM", "SortedByCoordinate",
         "--outReadsUnmapped", "Fastx",
         "--outFileNamePrefix", prefix,
@@ -197,16 +209,23 @@ def _star_map_one_transcript_set(
         *zcat_args,
     ]
     try:
-        run_cmd(star_cmd, cwd=wd)
+        run_cmd(starlong_cmd, cwd=wd)
     except ExternalToolError:
-        log.warning("STAR failed mapping %s, retrying with STARlong.", query.name)
-        run_cmd(["STARlong", *star_cmd[1:]], cwd=wd)
+        log.warning("STARlong failed mapping %s; falling back to segemehl -S.", query.name)
+        map_one_transcript_set_segemehl(config, query, out_bam)
+        return
 
     (wd / f"{prefix}Aligned.sortedByCoord.out.bam").rename(final)
     run_cmd(["samtools", "index", out_bam], cwd=wd)
     unmapped = wd / f"{prefix}Unmapped.out.mate1"
     if unmapped.exists():
         unmapped.rename(wd / f"{stem}.unmapped_transcripts.fasta")
+
+    if _count_mapped(final) == 0:
+        log.warning("STARlong mapped 0 records of %s; falling back to segemehl -S.", query.name)
+        final.unlink(missing_ok=True)
+        (wd / f"{out_bam}.bai").unlink(missing_ok=True)
+        map_one_transcript_set_segemehl(config, query, out_bam)
 
 
 def _log_mapping_rate(wd: Path) -> None:

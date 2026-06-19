@@ -83,6 +83,12 @@ from eukan.cli._framework import (
     "$EUKAN_ASSEMBLE_COMBINR_PATH).",
 )
 @optgroup.option(
+    "--uniprot", type=click.Path(exists=True, path_type=Path), default=None,
+    help="SwissProt FASTA (uniprot_sprot.faa) or prebuilt diamond .dmnd. Enables "
+    "homology-based splice-strand correction on unstranded libraries (skipped "
+    "when -S/--strand-specific is given). Without it, strand correction is a no-op.",
+)
+@optgroup.option(
     "--memory-gb", type=int, default=None,
     help="rnaSPAdes -m memory cap in GiB. Defaults to 60 percent of "
          "currently-available memory (floored at 4 GiB).",
@@ -99,6 +105,10 @@ from eukan.cli._framework import (
 @optgroup.option(
     "--run-map-transcripts", is_flag=True,
     help="Force re-run STAR transcript→genome mapping.",
+)
+@optgroup.option(
+    "--run-strand-correct", is_flag=True,
+    help="Force re-run homology-based splice-strand correction.",
 )
 @optgroup.option(
     "--run-sl-detect", is_flag=True,
@@ -131,6 +141,7 @@ def assemble(
     run_rnaspades: bool,
     run_jaccard: bool,
     run_map_transcripts: bool,
+    run_strand_correct: bool,
     run_sl_detect: bool,
     run_sl_cut: bool,
     run_combinr: bool,
@@ -139,6 +150,7 @@ def assemble(
     sl_sequence: str | None,
     sl_cluster_window: int,
     combinr_path: Path | None,
+    uniprot: Path | None,
     splice_permissive: bool,
     diagnose_softclips: bool,
     code: str,
@@ -190,6 +202,7 @@ def assemble(
         sl_sequence=sl_sequence,
         sl_cluster_window=sl_cluster_window,
         combinr_path=resolve_optional_path(combinr_path),
+        uniprot_db=resolve_optional_path(uniprot),
         splice_permissive=splice_permissive,
         diagnose_softclips=diagnose_softclips,
         genetic_code=code,
@@ -206,6 +219,7 @@ def assemble(
         run_stringtie=run_stringtie,
         run_rnaspades=run_rnaspades, run_jaccard=run_jaccard,
         run_map_transcripts=run_map_transcripts,
+        run_strand_correct=run_strand_correct,
         run_sl_detect=run_sl_detect, run_sl_cut=run_sl_cut,
         run_combinr=run_combinr, force=force,
     )

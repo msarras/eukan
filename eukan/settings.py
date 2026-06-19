@@ -331,6 +331,17 @@ class AssemblyConfig(_StepRunSettings):
     min_sl_insertion_len: int = 10
     """Minimum internal-insertion length (bp) considered as a spliced-leader signal."""
 
+    # --- Homology-based splice-strand correction (unstranded libraries) ---
+    uniprot_db: Path | None = None
+    """SwissProt FASTA (``uniprot_sprot.faa``) or prebuilt ``.dmnd`` enabling
+    forward-frame ``diamond blastx`` strand correction. Unset (or with ``-S``)
+    disables the strand_correct step."""
+    min_strand_consensus: int = 50
+    """Minimum confirmed introns required to trust the learned splice consensus;
+    below this the correction falls back to canonical GT-AG."""
+    strand_blastx_evalue: float = 1e-5
+    """diamond blastx e-value cutoff for a transcript to count as homology-confirmed."""
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def name(self) -> str:

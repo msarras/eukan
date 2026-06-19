@@ -10,6 +10,7 @@ from eukan.assembly.segemehl import map_reads_segemehl
 from eukan.assembly.sl_acceptors import detect_sl_acceptors
 from eukan.assembly.sl_cut import run_sl_cut
 from eukan.assembly.star import map_reads, map_transcripts_star
+from eukan.assembly.strand_correction import run_strand_correction
 from eukan.assembly.stringtie import run_stringtie
 from eukan.infra.artifacts import Artifact
 from eukan.infra.manifest import ASSEMBLY
@@ -38,7 +39,7 @@ def _aligner_step(aligner: str) -> StepSpec:
 
 def _steps_for(aligner: str) -> list[StepSpec]:
     """Assembly steps: <aligner> → stringtie (genome-guided) → rnaspades (de novo)
-    → jaccard → map_transcripts → sl_detect → sl_cut → combinr."""
+    → jaccard → map_transcripts → strand_correct → sl_detect → sl_cut → combinr."""
     return [
         _aligner_step(aligner),
         StepSpec("stringtie", run_stringtie, "stringtie.gtf", "--run-stringtie"),
@@ -51,6 +52,11 @@ def _steps_for(aligner: str) -> list[StepSpec]:
             "map_transcripts", map_transcripts_star,
             "rnaspades.genome.bam", "--run-map-transcripts",
         ),
+        # No declared output: strand_correct always converts the de novo BAM to
+        # rnaspades.genome.gff3 (for the SL cut), but only writes the *.stranded.gff3
+        # homology-corrected models when --uniprot is given on an unstranded library,
+        # so stale-output validation must not fire when it's a no-op.
+        StepSpec("strand_correct", run_strand_correction, None, "--run-strand-correct"),
         # sl_detect/sl_cut have no declared output: with no SL signal sl_detect
         # writes a header-only sl_acceptors.gff3 (zero features) and sl_cut is a
         # pass-through, so stale-output GFF validation must not fire on either.
@@ -72,6 +78,7 @@ def force_steps_from_run_flags(
     run_rnaspades: bool = False,
     run_jaccard: bool = False,
     run_map_transcripts: bool = False,
+    run_strand_correct: bool = False,
     run_sl_detect: bool = False,
     run_sl_cut: bool = False,
     run_combinr: bool = False,
@@ -80,7 +87,9 @@ def force_steps_from_run_flags(
     """Translate ``--run-X`` / ``--force`` flags into manifest keys to force.
 
     The inactive aligner's flag is a harmless no-op (its step is not in the
-    selected step list).
+    selected step list). Re-running ``map_transcripts`` also forces
+    ``strand_correct``: the new spliced BAM invalidates the converted/corrected
+    models the SL cut consumes.
     """
     return _force_steps_from_run_flags(
         ASSEMBLY, _steps_for(aligner),
@@ -89,6 +98,7 @@ def force_steps_from_run_flags(
         run_stringtie=run_stringtie,
         run_rnaspades=run_rnaspades, run_jaccard=run_jaccard,
         run_map_transcripts=run_map_transcripts,
+        run_strand_correct=run_strand_correct or run_map_transcripts,
         run_sl_detect=run_sl_detect, run_sl_cut=run_sl_cut,
         run_combinr=run_combinr,
     )

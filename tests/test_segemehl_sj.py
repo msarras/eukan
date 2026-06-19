@@ -156,11 +156,11 @@ def test_steps_for_selects_aligner():
     seg = _steps_for("segemehl")
     assert [s.name for s in star] == [
         "star", "stringtie", "rnaspades", "jaccard",
-        "map_transcripts", "sl_detect", "sl_cut", "combinr",
+        "map_transcripts", "strand_correct", "sl_detect", "sl_cut", "combinr",
     ]
     assert [s.name for s in seg] == [
         "segemehl", "stringtie", "rnaspades", "jaccard",
-        "map_transcripts", "sl_detect", "sl_cut", "combinr",
+        "map_transcripts", "strand_correct", "sl_detect", "sl_cut", "combinr",
     ]
     assert seg[0].output == "segemehl_Aligned.sortedByCoord.out.bam"
 
@@ -174,7 +174,8 @@ def test_force_steps_respects_active_aligner():
     assert force_steps_from_run_flags(aligner="segemehl", force=True) == [
         "assembly/segemehl", "assembly/stringtie",
         "assembly/rnaspades", "assembly/jaccard", "assembly/map_transcripts",
-        "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
+        "assembly/strand_correct", "assembly/sl_detect", "assembly/sl_cut",
+        "assembly/combinr",
     ]
 
 
