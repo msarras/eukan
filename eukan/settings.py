@@ -311,8 +311,25 @@ class AssemblyConfig(_StepRunSettings):
     aligner: Literal["auto", "star", "segemehl"] = "auto"
     align_mode: str = "Local"
     jaccard_clip: bool = False
+    jaccard_greediness: float = 1.5
+    """Coverage-adaptive slack for jaccard fusion-trough detection. At low read-pair
+    depth the pseudocount keeps a real fusion junction's jaccard above the fixed
+    trough floor, so the contig is never split; this widens the trough gate toward
+    the deepest jaccard physically reachable at the local depth (times this factor),
+    making low-coverage fusions splittable while leaving high-coverage behaviour
+    unchanged. 0 disables the adaptation (Trinity-faithful fixed floor)."""
     splice_permissive: bool = False
     diagnose_softclips: bool = True
+
+    # --- Genome-guided assembly (StringTie) stringency ---
+    stringtie_min_coverage: float = 1.5
+    """StringTie ``-c``: minimum per-bp read coverage for a transcript to be
+    assembled. Raised above StringTie's default of 1 to suppress low-coverage
+    spurious models."""
+    stringtie_min_isoform_fraction: float = 0.1
+    """StringTie ``-f``: minimum isoform abundance as a fraction of a locus's
+    dominant isoform. Raised above StringTie's default of 0.01 to drop minor
+    noise isoforms that inflate the genome-guided set."""
 
     # --- de novo + combinr consolidation routine (replaces PASA) ---
     rnaspades: bool = True

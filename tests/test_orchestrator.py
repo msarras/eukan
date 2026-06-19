@@ -388,8 +388,17 @@ class TestAssemblyStepScalars:
         spec = next(s for s in _steps_for("auto") if s.name == name)
         return spec.scalars(cfg) if spec.scalars else None
 
-    def test_stringtie_tracks_max_intron(self, tmp_path):
-        assert self._scalars(tmp_path, "stringtie") == ["max_intron_len=5000"]
+    def test_stringtie_tracks_max_intron_and_stringency(self, tmp_path):
+        scalars = self._scalars(tmp_path, "stringtie")
+        assert "max_intron_len=5000" in scalars
+        assert any(s.startswith("stringtie_min_coverage=") for s in scalars)
+        assert any(s.startswith("stringtie_min_isoform_fraction=") for s in scalars)
+
+    def test_jaccard_has_no_scalar(self, tmp_path):
+        # jaccard has no declared output, so it always re-runs on resume and a
+        # scalar would never be consulted (is_step_complete short-circuits first);
+        # a changed greediness re-clips via the always-re-run + map_transcripts.
+        assert self._scalars(tmp_path, "jaccard") is None
 
     def test_combinr_tracks_max_intron(self, tmp_path):
         assert self._scalars(tmp_path, "combinr") == ["max_intron_len=5000"]

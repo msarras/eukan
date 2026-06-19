@@ -228,6 +228,21 @@ def test_run_converts_denovo_bam_then_gates_on_no_uniprot(tmp_path, monkeypatch)
     assert not any("blastx" in c for c in called)               # diamond not run
 
 
+def test_run_clears_stale_stranded_on_noop(tmp_path, monkeypatch):
+    """A no-op run removes prior *.stranded.gff3 so sl_cut falls back to the fresh
+    jaccard-clipped StringTie GFF3 instead of a stale stranded file from a run that
+    had --uniprot."""
+    monkeypatch.setattr(sc, "run_cmd", lambda cmd, **kw: None)
+    (tmp_path / "stringtie.stranded.gff3").write_text("##gff-version 3\n")
+    (tmp_path / "rnaspades.genome.stranded.gff3").write_text("##gff-version 3\n")
+
+    config = _config(tmp_path, uniprot_db=None)  # correction now disabled
+    sc.run_strand_correction(config)
+
+    assert not (tmp_path / "stringtie.stranded.gff3").exists()
+    assert not (tmp_path / "rnaspades.genome.stranded.gff3").exists()
+
+
 def test_run_gates_on_strand_specific(tmp_path, monkeypatch):
     (tmp_path / "db.dmnd").write_text("x")
     (tmp_path / "stringtie.gtf").write_text(_gtf_tx("chrA", "T1", "+", [(1, 40), (51, 90)]))

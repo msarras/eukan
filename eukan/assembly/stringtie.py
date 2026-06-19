@@ -60,6 +60,11 @@ def run_stringtie(config: AssemblyConfig) -> None:
             "stringtie",
             str(bam),
             "-p", str(config.num_cpu),
+            # Stringency above StringTie's defaults (-c 1, -f 0.01): drop
+            # low-coverage spurious models and minor noise isoforms so the
+            # genome-guided set fed to combinr is cleaner.
+            "-c", str(config.stringtie_min_coverage),
+            "-f", str(config.stringtie_min_isoform_fraction),
             "-o", _GTF,
         ],
         cwd=wd,

@@ -71,7 +71,12 @@ from eukan.cli._framework import (
     "recovering longer introns also needs --run-star/--run-segemehl/--run-map-transcripts.",
 )
 @optgroup.option("--phred", type=click.Choice(["33", "64"]), default="33", show_default=True, help="Phred quality score.")
-@optgroup.option("--jaccard-clip", "-j", is_flag=True, help="Enable jaccard clipping.")
+@optgroup.option(
+    "--jaccard-clip", "-j", is_flag=True,
+    help="Enable jaccard clipping of fused transcripts (both rnaSPAdes contigs and "
+    "the StringTie GTF), splitting two adjacent loci joined into one model. "
+    "Needs paired reads; greediness via jaccard_greediness.",
+)
 @optgroup.option(
     "--rnaspades/--no-rnaspades", default=True, show_default=True,
     help="Run rnaSPAdes de novo assembly (the de novo source; consolidated by combinr).",

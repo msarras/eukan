@@ -26,11 +26,12 @@ Algorithm (faithful to Trinity, see ``trinityrnaseq/util/support_scripts/``):
 5. Split the contig at the clip points (segments shorter than ``min_segment``
    dropped).
 
-This module also exposes a GFF3/GTF clip path (:func:`clip_gff3`) that translates
-a spliced-transcript clip position onto a transcript>exon model and splits the
-parent feature — for a genome-anchored assembler (e.g. StringTie). That path is
-not wired into the default pipeline (which runs in FASTA mode pre-combinr) but
-is complete and unit-tested.
+The genome-anchored StringTie GTF is clipped the same way (:func:`_clip_stringtie_gtf`):
+reads are mapped to StringTie's spliced transcripts, the same coverage troughs are
+found, and the transcript>exon models are split at them (:func:`_split_models_at_clips`)
+into ``stringtie.jaccard.gff3`` — so a StringTie transcript fusing two adjacent loci is
+broken just as the de novo path keeps them separate. ``strand_correct``/``sl_cut`` then
+prefer that clipped GFF3 over the raw GTF (:func:`resolve_stringtie_models`).
 
 Jaccard clipping needs read PAIRS; with single-end reads the step is a no-op.
 """
@@ -45,6 +46,7 @@ from pathlib import Path
 
 import pysam
 from Bio import SeqIO
+from Bio.Seq import Seq
 
 from eukan.assembly.star import (
     _STAR_BAM_SORT_RAM,
@@ -54,6 +56,7 @@ from eukan.assembly.star import (
 from eukan.exceptions import ExternalToolError
 from eukan.gff import create_gff_db
 from eukan.gff.io import iter_assembled_sequences
+from eukan.infra.genome import ContigIndex
 from eukan.infra.logging import get_logger
 from eukan.infra.runner import run_cmd
 from eukan.settings import AssemblyConfig
@@ -71,6 +74,11 @@ _MIN_INSERT = 100          # proper-pair insert-size floor
 _MAX_INSERT = 500          # proper-pair insert-size ceiling
 _MIN_SEGMENT = 25          # shortest split segment kept (Trinity's k-mer floor)
 _REPOSITION_HALF_WIN = _TROUGH_WIN // 2  # coverage-reposition search radius (100)
+# Ceiling for the coverage-adapted trough gate: below the depth where a clean
+# junction would need a jaccard above this, the bridging signal is too weak to
+# tell a fusion from noise, so the gate stops relaxing (never over-clips a real
+# single transcript that simply has a thin patch).
+_MAX_ADAPTIVE_TROUGH = 0.30
 
 # The de novo FASTAs the map_transcripts step consumes; the jaccard step rewrites
 # each into a ``.jaccard.fasta`` sibling that ``star.map_transcripts``
@@ -78,6 +86,12 @@ _REPOSITION_HALF_WIN = _TROUGH_WIN // 2  # coverage-reposition search radius (10
 _TRANSCRIPT_FASTAS = (
     "rnaspades.fasta",
 )
+
+# The genome-guided StringTie GTF and the clipped sibling the jaccard step writes
+# for it. StringTie can fuse two adjacent loci into one transcript; clipping its
+# spliced models at read-pair troughs splits those the way the de novo path does.
+_STRINGTIE_GTF = "stringtie.gtf"
+STRINGTIE_JACCARD_GFF3 = "stringtie.jaccard.gff3"
 
 
 def jaccard_output_name(fasta_name: str) -> str:
@@ -182,15 +196,42 @@ class Trough:
     avg_delta: float
 
 
-def _candidate_troughs(jac: list[float], trough_win: int, max_trough: float) -> list[Trough]:
-    """Positions whose jaccard dips to <= *max_trough* (Trinity trough scan)."""
+def _candidate_troughs(
+    jac: list[float],
+    trough_win: int,
+    max_trough: float,
+    *,
+    cov: list[int] | None = None,
+    greed: float = 0.0,
+) -> list[Trough]:
+    """Positions whose jaccard dips to <= the (optionally coverage-adapted) trough.
+
+    With ``greed > 0`` and a coverage array, the absolute *max_trough* floor is
+    widened per position toward the deepest jaccard a clean (``n_both ≈ 0``)
+    junction can physically reach at the local read-pair depth —
+    ``pseudo / (left + right + pseudo)`` from the two flanking hill coverages —
+    times *greed*, capped at :data:`_MAX_ADAPTIVE_TROUGH`. At high depth that
+    product sits below *max_trough*, so the strict floor stands; at low depth
+    (where the pseudocount alone keeps a real junction above 0.05) the gate relaxes
+    so the junction becomes a candidate. The flanking-hill and coverage-reposition
+    tests downstream still decide whether a candidate is a true fusion, so relaxing
+    the gate adds sensitivity without by itself widening what is finally cut.
+    """
     L = len(jac) - 1
     half = trough_win // 2
     troughs: list[Trough] = []
     for i in range(trough_win, L + 1):
         center = i - half
         c = jac[center]
-        if c <= max_trough:
+        thr = max_trough
+        if cov is not None and greed > 0.0:
+            # Hill coverage on both sides; clamp the left index off the unused
+            # cov[0] sentinel at the 5' start so the gate isn't lopsidedly relaxed
+            # at the very first scanned position.
+            flank = cov[max(1, i - trough_win)] + cov[i]
+            achievable = _PSEUDO / (flank + _PSEUDO)
+            thr = max(max_trough, min(greed * achievable, _MAX_ADAPTIVE_TROUGH))
+        if c <= thr:
             left = jac[i - trough_win]
             right = jac[i]
             avg_delta = ((left - c) + (right - c)) / 2
@@ -256,16 +297,23 @@ def find_clip_points(
     max_trough: float = _MAX_TROUGH_VAL,
     min_delta: float = _MIN_JACCARD_DELTA,
     pseudo: int = _PSEUDO,
+    greed: float = 0.0,
 ) -> list[int]:
-    """Clip positions (sorted, 1-based) for one transcript's fragment spans."""
+    """Clip positions (sorted, 1-based) for one transcript's fragment spans.
+
+    *greed* (>0) makes the trough gate coverage-adaptive so low-coverage fusions
+    are split too; 0 keeps Trinity's fixed *max_trough* floor (see
+    :func:`_candidate_troughs`).
+    """
     jac = jaccard_array(frags, length, window=window, pseudo=pseudo)
-    troughs = _candidate_troughs(jac, trough_win, max_trough)
+    cov = coverage_array(frags, length)
+    troughs = _candidate_troughs(jac, trough_win, max_trough, cov=cov, greed=greed)
     if not troughs:
         return []
     clips = _require_hills(_group_and_pick_best(troughs, trough_win), jac, trough_win, min_delta)
     if not clips:
         return []
-    _reposition_by_coverage(clips, coverage_array(frags, length), _REPOSITION_HALF_WIN)
+    _reposition_by_coverage(clips, cov, _REPOSITION_HALF_WIN)
     return sorted(c.pos for c in clips)
 
 
@@ -435,7 +483,7 @@ def _clip_one_fasta(config: AssemblyConfig, src: Path, out: Path) -> tuple[int, 
     for ref, spans in iter_fragment_spans(bam):
         if not spans:
             continue
-        clips = find_clip_points(spans, ref_len[ref])
+        clips = find_clip_points(spans, ref_len[ref], greed=config.jaccard_greediness)
         if clips:
             clip_map[ref] = clips
 
@@ -462,7 +510,10 @@ def _clip_one_fasta(config: AssemblyConfig, src: Path, out: Path) -> tuple[int, 
 
 
 def run_jaccard(config: AssemblyConfig) -> None:
-    """Jaccard-clip the assembled transcript FASTAs (no-op on single-end reads)."""
+    """Jaccard-clip the de novo transcript FASTAs and the StringTie GTF.
+
+    No-op on single-end reads (read-pair bridging is the clip signal).
+    """
     wd = config.work_dir
     if not (config.left_reads and config.right_reads):
         log.warning(
@@ -480,6 +531,16 @@ def run_jaccard(config: AssemblyConfig) -> None:
         log.info(
             "Jaccard clip %s -> %s: %d -> %d sequences (%d contigs split).",
             src.name, out.name, n_in, n_out, n_clipped,
+        )
+
+    # Genome-guided StringTie models: clip the GTF the same way (read-pair troughs
+    # on the spliced transcripts) so a fused StringTie locus is split too.
+    gtf = wd / _STRINGTIE_GTF
+    if gtf.exists() and gtf.stat().st_size > 0:
+        n_in, n_split = _clip_stringtie_gtf(config)
+        log.info(
+            "Jaccard clip %s -> %s: %d models (%d fused models split).",
+            gtf.name, STRINGTIE_JACCARD_GFF3, n_in, n_split,
         )
 
 
@@ -633,6 +694,29 @@ def _write_transcript_models_gff3(models: list[_Tx], out_gff: str | Path) -> Non
                 )
 
 
+def _split_models_at_clips(
+    gff: str | Path, clip_map: dict[str, list[int]], min_segment: int
+) -> tuple[list[_Tx], int]:
+    """Parse transcript models from *gff* and split each at its clip positions.
+
+    *clip_map* maps transcript id -> spliced-transcript clip positions (the same
+    coordinate space as a read-to-spliced-FASTA mapping). Returns
+    ``(out_models, n_split)``; transcripts absent from *clip_map* (or whose clips
+    all fall in sub-*min_segment* pieces) pass through unchanged.
+    """
+    out_models: list[_Tx] = []
+    n_split = 0
+    for tx in _parse_transcript_models(gff):
+        clips = clip_map.get(tx.tid)
+        split = _split_transcript(tx, clips, min_segment) if clips else None
+        if split:
+            out_models.extend(split)
+            n_split += 1
+        else:
+            out_models.append(tx)
+    return out_models, n_split
+
+
 def clip_gff3(
     gff: str | Path,
     genome: str | Path,
@@ -642,20 +726,86 @@ def clip_gff3(
 ) -> None:
     """Split fused transcripts in a transcript>exon GFF3/GTF at *clip_map* positions.
 
-    *clip_map* maps transcript id -> spliced-transcript clip positions (the same
-    coordinate space as a read-to-spliced-FASTA mapping). Writes the split models
-    to *out_gff* (gene>mRNA>exon) and their re-spliced sequences to *out_fasta*
-    (minus-strand reverse-complement handled by ``iter_assembled_sequences``).
-    Transcripts with no clips pass through unchanged.
+    Writes the split models to *out_gff* (gene>mRNA>exon) and their re-spliced
+    sequences to *out_fasta* (minus-strand reverse-complement handled by
+    ``iter_assembled_sequences``). Transcripts with no clips pass through unchanged.
     """
-    out_models: list[_Tx] = []
-    for tx in _parse_transcript_models(gff):
-        clips = clip_map.get(tx.tid)
-        split = _split_transcript(tx, clips, _MIN_SEGMENT) if clips else None
-        out_models.extend(split if split else [tx])
-
+    out_models, _ = _split_models_at_clips(gff, clip_map, _MIN_SEGMENT)
     _write_transcript_models_gff3(out_models, out_gff)
     db = create_gff_db(str(out_gff))
     with open(out_fasta, "w") as fh:
         for mrna, seq in iter_assembled_sequences(db, genome, child_featuretype="exon"):
             fh.write(f">{mrna.id}\n{seq}\n")
+
+
+# ---------------------------------------------------------------------------
+# Genome-guided StringTie GTF clip (read-pair troughs on spliced transcripts)
+# ---------------------------------------------------------------------------
+
+
+def resolve_stringtie_models(work_dir: Path) -> Path:
+    """The StringTie model file downstream steps read.
+
+    The jaccard-clipped ``stringtie.jaccard.gff3`` when the jaccard step produced it
+    (so a fused StringTie locus is already split), else the raw ``stringtie.gtf``.
+    Mirrors how ``map_transcripts`` prefers the de novo ``.jaccard.fasta`` sibling.
+    """
+    clipped = work_dir / STRINGTIE_JACCARD_GFF3
+    if clipped.exists() and clipped.stat().st_size > 0:
+        return clipped
+    return work_dir / _STRINGTIE_GTF
+
+
+def _write_spliced_fasta(models: list[_Tx], genome: str | Path, out_fasta: Path) -> None:
+    """Write each model's spliced sequence (5'->3', RC on ``-``) keyed by transcript id.
+
+    Same orientation convention as :func:`eukan.gff.io.iter_assembled_sequences`
+    (ascending-genomic exon concat, reverse-complemented on the minus strand), so
+    read-to-FASTA fragment spans land in the same 5'->3' spliced space the clip
+    splitter (:func:`_split_transcript` / :func:`_partition_exons`) expects.
+    """
+    with ContigIndex(genome) as contigs, open(out_fasta, "w") as fh:
+        for tx in models:
+            seq = "".join(str(contigs[tx.chrom][s - 1 : e].seq) for s, e in tx.exons)
+            if tx.strand == "-":
+                seq = str(Seq(seq).reverse_complement())
+            fh.write(f">{tx.tid}\n{seq}\n")
+
+
+def _clip_stringtie_gtf(config: AssemblyConfig) -> tuple[int, int]:
+    """Jaccard-clip the genome-guided StringTie GTF; return ``(n_models, n_split)``.
+
+    Maps read pairs to StringTie's spliced transcripts, finds coverage troughs the
+    same way as the de novo FASTA path (coverage-adaptive via ``jaccard_greediness``),
+    and splits the genome-anchored models at those junctions into
+    ``stringtie.jaccard.gff3``. A no-op (empty clip map) still rewrites the file so
+    downstream consistently reads the clipped artifact.
+    """
+    wd = config.work_dir
+    gtf = wd / _STRINGTIE_GTF
+    models = _parse_transcript_models(gtf)
+    out_gff = wd / STRINGTIE_JACCARD_GFF3
+    if not models:
+        _write_transcript_models_gff3([], out_gff)
+        return 0, 0
+
+    spliced = wd / "stringtie.spliced.fasta"
+    _write_spliced_fasta(models, config.genome, spliced)
+    bam = _star_map_to_transcripts(config, spliced, "stringtie")
+
+    handle = pysam.AlignmentFile(str(bam), "rb")
+    ref_len = dict(zip(handle.references, handle.lengths, strict=False))
+    handle.close()
+
+    clip_map: dict[str, list[int]] = {}
+    for ref, spans in iter_fragment_spans(bam):
+        if not spans:
+            continue
+        clips = find_clip_points(spans, ref_len[ref], greed=config.jaccard_greediness)
+        if clips:
+            clip_map[ref] = clips
+
+    out_models, n_split = _split_models_at_clips(gtf, clip_map, config.min_sl_fragment)
+    _write_transcript_models_gff3(out_models, out_gff)
+    spliced.unlink(missing_ok=True)
+    return len(models), n_split

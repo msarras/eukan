@@ -29,7 +29,12 @@ from eukan.assembly.bam_diagnostic import (
     _CIGAR_N,
     _CIGAR_X,
 )
-from eukan.assembly.jaccard import _parse_attrs, _split_transcript, _Tx
+from eukan.assembly.jaccard import (
+    _parse_attrs,
+    _split_transcript,
+    _Tx,
+    resolve_stringtie_models,
+)
 from eukan.assembly.sl_acceptors import AcceptorSite, load_sl_acceptors
 from eukan.infra.artifacts import Artifact
 from eukan.infra.logging import get_logger
@@ -315,15 +320,18 @@ def run_sl_cut(config: AssemblyConfig) -> None:
     sites = load_sl_acceptors(acc_path) if acc_path.exists() else []
     min_segment = config.min_sl_fragment
 
+    # The raw StringTie fallback prefers the jaccard-clipped GFF3 when present (its
+    # fused loci are already split); the de novo genome GFF3 is already built from
+    # jaccard-clipped FASTAs upstream, so it needs no resolver.
     for stranded, raw, out_name in (
-        ("stringtie.stranded.gff3", "stringtie.gtf", "stringtie.sl_cut.gff3"),
+        ("stringtie.stranded.gff3", resolve_stringtie_models(wd), "stringtie.sl_cut.gff3"),
         (
             "rnaspades.genome.stranded.gff3",
-            "rnaspades.genome.gff3",
+            wd / "rnaspades.genome.gff3",
             "rnaspades.genome.sl_cut.gff3",
         ),
     ):
-        src = wd / stranded if (wd / stranded).exists() else wd / raw
+        src = wd / stranded if (wd / stranded).exists() else raw
         if not src.exists():
             continue
         out = wd / out_name

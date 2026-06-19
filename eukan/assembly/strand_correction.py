@@ -44,6 +44,7 @@ from eukan.assembly.jaccard import (
     _parse_transcript_models,
     _Tx,
     _write_transcript_models_gff3,
+    resolve_stringtie_models,
 )
 from eukan.assembly.sl_cut import _DENOVO_BAMS, _GENOME_BAM_SUFFIX, bam_to_transcript_gff3
 from eukan.infra.genome import ContigIndex
@@ -53,7 +54,6 @@ from eukan.settings import AssemblyConfig
 
 log = get_logger(__name__)
 
-_STRINGTIE_GTF = "stringtie.gtf"
 _STRINGTIE_STRANDED = "stringtie.stranded.gff3"
 _DENOVO_GFF3 = "rnaspades.genome.gff3"
 _DENOVO_STRANDED = "rnaspades.genome.stranded.gff3"
@@ -219,6 +219,14 @@ def run_strand_correction(config: AssemblyConfig) -> None:
         n = bam_to_transcript_gff3(bam, wd / f"{stem}.genome.gff3", source=stem)
         log.info("Converted %s -> %s.genome.gff3 (%d models).", bam.name, stem, n)
 
+    # Clear any stranded models from a prior run before deciding whether to rewrite
+    # them. When correction is now a no-op (stranded library, no --uniprot, or a
+    # re-run that re-clipped the StringTie GTF), a stale *.stranded.gff3 would
+    # otherwise shadow the fresh resolve_stringtie_models() fallback in sl_cut and
+    # keep the de-fused models out of combinr. The active path rewrites them below.
+    for stale in (_STRINGTIE_STRANDED, _DENOVO_STRANDED):
+        (wd / stale).unlink(missing_ok=True)
+
     # 2. Gate: only for unstranded libraries with a protein DB supplied.
     if config.strand_specific is not None:
         log.info(
@@ -230,9 +238,10 @@ def run_strand_correction(config: AssemblyConfig) -> None:
         log.info("No --uniprot DB; skipping homology-based strand correction.")
         return
 
-    # 3. The model sets present (StringTie GTF + de novo genome GFF3).
+    # 3. The model sets present (StringTie models + de novo genome GFF3). Prefer the
+    #    jaccard-clipped StringTie GFF3 when the jaccard step produced it.
     sets: list[tuple[str, Path, Path]] = []
-    if (st := wd / _STRINGTIE_GTF).exists():
+    if (st := resolve_stringtie_models(wd)).exists():
         sets.append(("st", st, wd / _STRINGTIE_STRANDED))
     if (dn := wd / _DENOVO_GFF3).exists():
         sets.append(("rs", dn, wd / _DENOVO_STRANDED))

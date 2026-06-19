@@ -93,6 +93,89 @@ def test_well_supported_contig_has_no_clip():
     assert find_clip_points(frags, 350) == []
 
 
+# --- coverage-adaptive greediness ------------------------------------------
+
+
+def _two_clusters(start_a, start_b, n=6, step=16, ins=150):
+    """Two low-depth fragment clusters separated by a gap (a faint fusion)."""
+    a = [(start_a + k * step, start_a + k * step + ins) for k in range(n)]
+    b = [(start_b + k * step, start_b + k * step + ins) for k in range(n)]
+    return a + b
+
+
+def test_lowcov_fusion_split_only_when_greedy():
+    # Two ~6x clusters with a gap: the junction jaccard troughs to ~0.2, above the
+    # fixed 0.05 floor, so the Trinity-faithful pass (greed=0) misses it. The
+    # coverage-adaptive gate (greed>0) widens the floor at this depth and splits it.
+    frags = _two_clusters(1, 430)
+    L = 700
+    assert find_clip_points(frags, L, greed=0.0) == []
+    clips = find_clip_points(frags, L, greed=1.5)
+    assert len(clips) == 1
+    assert 230 < clips[0] < 430  # the clip lands inside the gap
+
+
+def test_greed_does_not_overclip_dense_or_change_highcov_break():
+    # A dense single contig is never split, even when greedy (bridging holds).
+    dense = [(i, i + 150) for i in range(1, 200)]
+    assert find_clip_points(dense, 350, greed=1.5) == []
+    # A high-coverage clean break is called identically with or without greed:
+    # the achievable floor is far below 0.05 there, so the strict gate stands.
+    hi = [(i, i + 150) for i in range(1, 80)] + [(i, i + 150) for i in range(400, 480)]
+    assert find_clip_points(hi, 700, greed=0.0) == find_clip_points(hi, 700, greed=1.5)
+
+
+def _dip_jac(length: int, center: int, val: float) -> list[float]:
+    arr = [1.0] * (length + 1)
+    arr[center] = val
+    return arr
+
+
+def test_candidate_troughs_adaptive_threshold():
+    L, center, dip = 600, 300, 0.12
+    jac = _dip_jac(L, center, dip)
+    # Low flank coverage: achievable floor rises above the dip -> candidate.
+    low = _candidate_troughs(jac, j._TROUGH_WIN, j._MAX_TROUGH_VAL, cov=[3] * (L + 1), greed=1.5)
+    assert [t.pos for t in low] == [center]
+    # High flank coverage: achievable floor stays below 0.05, the dip (0.12) is
+    # NOT a clean fusion at that depth -> rejected (strict gate holds).
+    high = _candidate_troughs(jac, j._TROUGH_WIN, j._MAX_TROUGH_VAL, cov=[50] * (L + 1), greed=1.5)
+    assert high == []
+    # greed=0 (or no cov) reproduces the fixed-floor behaviour exactly.
+    assert _candidate_troughs(jac, j._TROUGH_WIN, j._MAX_TROUGH_VAL, cov=[3] * (L + 1), greed=0.0) == []
+    assert _candidate_troughs(jac, j._TROUGH_WIN, j._MAX_TROUGH_VAL) == []
+
+
+def test_candidate_troughs_no_cov0_phantom_at_start():
+    # The first scanned center (100) must use a real left-flank coverage, not the
+    # cov[0]=0 sentinel; with uniform coverage its gate then matches an interior
+    # center, so a dip the interior rejects is rejected at the start too.
+    L = 600
+    cov = [10] * (L + 1)
+    start = _candidate_troughs(
+        _dip_jac(L, 100, 0.10), j._TROUGH_WIN, j._MAX_TROUGH_VAL, cov=cov, greed=1.5
+    )
+    mid = _candidate_troughs(
+        _dip_jac(L, 300, 0.10), j._TROUGH_WIN, j._MAX_TROUGH_VAL, cov=cov, greed=1.5
+    )
+    assert [t.pos for t in start] == [t.pos for t in mid] == []
+
+
+def test_candidate_troughs_adaptive_cap():
+    L, center = 600, 300
+    cov = [1] * (L + 1)  # achievable 1/3 -> *1.5 = 0.5, capped at _MAX_ADAPTIVE_TROUGH
+    below = _candidate_troughs(
+        _dip_jac(L, center, j._MAX_ADAPTIVE_TROUGH - 0.02),
+        j._TROUGH_WIN, j._MAX_TROUGH_VAL, cov=cov, greed=1.5,
+    )
+    assert [t.pos for t in below] == [center]
+    above = _candidate_troughs(
+        _dip_jac(L, center, j._MAX_ADAPTIVE_TROUGH + 0.05),
+        j._TROUGH_WIN, j._MAX_TROUGH_VAL, cov=cov, greed=1.5,
+    )
+    assert above == []
+
+
 # --- coverage --------------------------------------------------------------
 
 
@@ -215,6 +298,112 @@ def test_clip_gff3_splits_and_reextracts(tmp_path, strand):
     assert recs["t1.j1"] == orig[:45]      # guards the minus-strand sign
     assert recs["t1.j2"] == orig[45:]
     assert recs["t1.j1"] + recs["t1.j2"] == orig
+
+
+def test_split_models_at_clips_counts_and_passthrough(tmp_path):
+    gff = tmp_path / "tx.gff3"
+    gff.write_text(_GFF_TEMPLATE.format(s="+"))
+    # spliced length 80; a clip at 45 splits into two >=25 bp pieces.
+    out, n_split = j._split_models_at_clips(gff, {"t1": [45]}, 25)
+    assert n_split == 1
+    assert sorted(m.tid for m in out) == ["t1.j1", "t1.j2"]
+    # no clip for this id -> passthrough, n_split 0.
+    out2, n2 = j._split_models_at_clips(gff, {}, 25)
+    assert n2 == 0 and [m.tid for m in out2] == ["t1"]
+
+
+def test_write_spliced_fasta_matches_iter_assembled(tmp_path):
+    # _write_spliced_fasta must use the SAME orientation as iter_assembled_sequences
+    # (ascending-genomic concat, RC on '-'), so clip coords line up across paths.
+    from eukan.assembly.jaccard import _parse_transcript_models, _write_transcript_models_gff3
+    from eukan.gff import create_gff_db
+    from eukan.gff.io import iter_assembled_sequences
+
+    (tmp_path / "genome.fa").write_text(f">chr1\n{GENOME}\n")
+    gtf = tmp_path / "stringtie.gtf"
+    gtf.write_text(
+        'chr1\tStringTie\texon\t1\t40\t.\t+\t.\ttranscript_id "p";\n'
+        'chr1\tStringTie\texon\t51\t90\t.\t+\t.\ttranscript_id "p";\n'
+        'chr1\tStringTie\texon\t1\t40\t.\t-\t.\ttranscript_id "m";\n'
+        'chr1\tStringTie\texon\t51\t90\t.\t-\t.\ttranscript_id "m";\n'
+    )
+    models = _parse_transcript_models(gtf)
+    mine_path = tmp_path / "spliced.fasta"
+    j._write_spliced_fasta(models, tmp_path / "genome.fa", mine_path)
+    mine = _read_fasta(mine_path)
+
+    norm = tmp_path / "norm.gff3"
+    _write_transcript_models_gff3(models, norm)
+    ref = {
+        m.id: s
+        for m, s in iter_assembled_sequences(
+            create_gff_db(str(norm)), tmp_path / "genome.fa", child_featuretype="exon"
+        )
+    }
+    assert mine == ref
+    assert mine["m"] != mine["p"]  # minus strand really is reverse-complemented
+
+
+def test_resolve_stringtie_models_prefers_clipped(tmp_path):
+    from eukan.assembly.jaccard import STRINGTIE_JACCARD_GFF3, resolve_stringtie_models
+
+    (tmp_path / "stringtie.gtf").write_text("x")
+    assert resolve_stringtie_models(tmp_path).name == "stringtie.gtf"
+    # empty clipped file is ignored (size 0); non-empty one is preferred.
+    (tmp_path / STRINGTIE_JACCARD_GFF3).write_text("")
+    assert resolve_stringtie_models(tmp_path).name == "stringtie.gtf"
+    (tmp_path / STRINGTIE_JACCARD_GFF3).write_text("##gff-version 3\n")
+    assert resolve_stringtie_models(tmp_path).name == STRINGTIE_JACCARD_GFF3
+
+
+def _header_bam(path, refs):
+    header = {"HD": {"VN": "1.6", "SO": "coordinate"},
+              "SQ": [{"SN": n, "LN": ln} for n, ln in refs.items()]}
+    with pysam.AlignmentFile(str(path), "wb", header=header):
+        pass
+
+
+def test_clip_stringtie_gtf_splits_fused_model(tmp_path, monkeypatch):
+    (tmp_path / "genome.fa").write_text(f">chr1\n{GENOME}\n")
+    gtf = tmp_path / "stringtie.gtf"
+    gtf.write_text(
+        'chr1\tStringTie\ttranscript\t1\t90\t.\t+\t.\ttranscript_id "STRG.1.1";\n'
+        'chr1\tStringTie\texon\t1\t40\t.\t+\t.\ttranscript_id "STRG.1.1";\n'
+        'chr1\tStringTie\texon\t51\t90\t.\t+\t.\ttranscript_id "STRG.1.1";\n'
+    )
+    bam = tmp_path / "jaccard_stringtie_Aligned.sortedByCoord.out.bam"
+    _header_bam(bam, {"STRG.1.1": 80})  # spliced length of the transcript
+
+    monkeypatch.setattr(j, "_star_map_to_transcripts", lambda cfg, fa, tag: bam)
+    monkeypatch.setattr(j, "iter_fragment_spans", lambda b: iter([("STRG.1.1", [(1, 80)])]))
+    # decouple from the jaccard math (tested elsewhere): clip the 80 bp tx at 45.
+    monkeypatch.setattr(j, "find_clip_points", lambda spans, length, **kw: [45])
+
+    config = AssemblyConfig(
+        genome=tmp_path / "genome.fa", work_dir=tmp_path,
+        left_reads=tmp_path / "l.fq", right_reads=tmp_path / "r.fq", num_cpu=1,
+    )
+    n_in, n_split = j._clip_stringtie_gtf(config)
+    assert (n_in, n_split) == (1, 1)
+    out = (tmp_path / "stringtie.jaccard.gff3").read_text()
+    assert out.count("\tmRNA\t") == 2  # split into two models
+    assert "STRG.1.1.j1" in out and "STRG.1.1.j2" in out
+    assert not (tmp_path / "stringtie.spliced.fasta").exists()  # intermediate cleaned
+
+
+def test_run_jaccard_clips_stringtie_when_present(tmp_path, monkeypatch):
+    monkeypatch.setattr(j, "_clip_one_fasta", lambda cfg, src, out: (1, 1, 0))
+    called: list[str] = []
+    monkeypatch.setattr(j, "_clip_stringtie_gtf", lambda cfg: called.append("st") or (3, 1))
+
+    (tmp_path / "rnaspades.fasta").write_text(">c1\nACGTACGT\n")
+    (tmp_path / "stringtie.gtf").write_text("chr1\tx\texon\t1\t5\t.\t+\t.\ttranscript_id \"a\";\n")
+    config = AssemblyConfig(
+        genome=tmp_path / "genome.fa", work_dir=tmp_path,
+        left_reads=tmp_path / "l.fq", right_reads=tmp_path / "r.fq", num_cpu=1,
+    )
+    run_jaccard(config)
+    assert called == ["st"]  # StringTie GTF clipped alongside the de novo FASTA
 
 
 def test_clip_gff3_passthrough_when_no_clip(tmp_path):

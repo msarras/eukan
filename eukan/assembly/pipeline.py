@@ -48,9 +48,9 @@ def _denovo_genome_bams(config: AssemblyConfig) -> list[Path]:
 
 
 def _strand_correct_inputs(config: AssemblyConfig) -> list[Path]:
-    from eukan.assembly.strand_correction import _STRINGTIE_GTF
+    from eukan.assembly.jaccard import resolve_stringtie_models
 
-    return [*_denovo_genome_bams(config), config.work_dir / _STRINGTIE_GTF]
+    return [*_denovo_genome_bams(config), resolve_stringtie_models(config.work_dir)]
 
 
 def _sl_detect_inputs(config: AssemblyConfig) -> list[Path]:
@@ -61,16 +61,16 @@ def _sl_detect_inputs(config: AssemblyConfig) -> list[Path]:
 
 
 def _sl_cut_inputs(config: AssemblyConfig) -> list[Path]:
+    from eukan.assembly.jaccard import resolve_stringtie_models
     from eukan.assembly.strand_correction import (
         _DENOVO_GFF3,
         _DENOVO_STRANDED,
-        _STRINGTIE_GTF,
         _STRINGTIE_STRANDED,
     )
 
     wd = config.work_dir
     return [
-        wd / _STRINGTIE_STRANDED, wd / _STRINGTIE_GTF,
+        wd / _STRINGTIE_STRANDED, resolve_stringtie_models(wd),
         wd / _DENOVO_STRANDED, wd / _DENOVO_GFF3,
         wd / Artifact.SL_ACCEPTORS.value,
     ]
@@ -92,6 +92,16 @@ def _combinr_inputs(config: AssemblyConfig) -> list[Path]:
 
 def _max_intron_scalar(config: AssemblyConfig) -> list[str]:
     return [f"max_intron_len={config.max_intron_len}"]
+
+
+def _stringtie_scalars(config: AssemblyConfig) -> list[str]:
+    # StringTie reads a max-intron-bounded BAM and runs at a configurable -c/-f
+    # stringency; changing any of these re-assembles the genome-guided set.
+    return [
+        f"max_intron_len={config.max_intron_len}",
+        f"stringtie_min_coverage={config.stringtie_min_coverage}",
+        f"stringtie_min_isoform_fraction={config.stringtie_min_isoform_fraction}",
+    ]
 
 
 def _sl_cut_scalars(config: AssemblyConfig) -> list[str]:
@@ -128,12 +138,16 @@ def _steps_for(aligner: str) -> list[StepSpec]:
         # changed -M must re-run it (scalars); the bounded BAM is built in-step.
         StepSpec(
             "stringtie", run_stringtie, "stringtie.gtf", "--run-stringtie",
-            scalars=_max_intron_scalar,
+            scalars=_stringtie_scalars,
         ),
         StepSpec("rnaspades", run_rnaspades, "rnaspades.fasta", "--run-rnaspades"),
         # No declared output: jaccard rewrites each transcript FASTA into a
         # ``.jaccard.fasta`` sibling, but on single-end input (or zero clips) it
         # legitimately writes nothing, so stale-output validation must not fire.
+        # Having no declared output it always re-runs on resume, so a changed
+        # ``jaccard_greediness`` re-clips and cascades to map_transcripts (which
+        # fingerprints the rewritten ``.jaccard.fasta``) — a scalar here would be
+        # inert, since is_step_complete never reaches the fingerprint check.
         StepSpec("jaccard", run_jaccard, None, "--run-jaccard"),
         StepSpec(
             "map_transcripts", map_transcripts,
@@ -177,7 +191,10 @@ _DOWNSTREAM: dict[str, tuple[str, ...]] = {
     "segemehl": ("stringtie", "sl_detect"),
     "stringtie": ("strand_correct", "sl_cut"),
     "rnaspades": ("jaccard",),
-    "jaccard": ("map_transcripts",),
+    # jaccard now also clips the StringTie GTF -> stringtie.jaccard.gff3, which
+    # strand_correct/sl_cut read, so re-running it must re-run strand_correct too
+    # (map_transcripts already reaches it, but the edge is now direct).
+    "jaccard": ("map_transcripts", "strand_correct"),
     "map_transcripts": ("strand_correct", "sl_detect"),
     "strand_correct": ("sl_cut",),
     "sl_detect": ("sl_cut",),

@@ -13,7 +13,9 @@ from eukan.assembly.sl_cut import (
     _project_genomic_to_spliced,
     bam_to_transcript_gff3,
     cut_models_at_sl,
+    run_sl_cut,
 )
+from eukan.settings import AssemblyConfig
 
 # A limit large enough that the SL-only test cases never trip the max-intron cut.
 _NO_MAX = 1_000_000
@@ -249,3 +251,27 @@ def test_count_long_introns():
     assert _count_long_introns(tx, 5000) == 1
     tx2 = _Tx("t", "chr1", "+", "src", [(1, 40), (51, 90)])
     assert _count_long_introns(tx2, 5000) == 0
+
+
+def test_run_sl_cut_prefers_jaccard_stringtie_gff3(tmp_path):
+    # When the jaccard step produced stringtie.jaccard.gff3 (the de-fused StringTie
+    # models), run_sl_cut must read it instead of the raw stringtie.gtf.
+    (tmp_path / "stringtie.gtf").write_text(
+        'chr1\tStringTie\texon\t1\t100\t.\t+\t.\ttranscript_id "FUSED";\n'
+    )
+    (tmp_path / "stringtie.jaccard.gff3").write_text(
+        "##gff-version 3\n"
+        "chr1\tj\tgene\t1\t40\t.\t+\t.\tID=A.gene\n"
+        "chr1\tj\tmRNA\t1\t40\t.\t+\t.\tID=A;Parent=A.gene\n"
+        "chr1\tj\texon\t1\t40\t.\t+\t.\tID=A.e1;Parent=A\n"
+        "chr1\tj\tgene\t60\t100\t.\t+\t.\tID=B.gene\n"
+        "chr1\tj\tmRNA\t60\t100\t.\t+\t.\tID=B;Parent=B.gene\n"
+        "chr1\tj\texon\t60\t100\t.\t+\t.\tID=B.e1;Parent=B\n"
+    )
+    config = AssemblyConfig(genome=tmp_path / "g.fa", work_dir=tmp_path, num_cpu=1)
+    run_sl_cut(config)  # no SL acceptors, no long introns -> passthrough
+
+    out = (tmp_path / "stringtie.sl_cut.gff3").read_text()
+    assert out.count("\tmRNA\t") == 2          # the two de-fused models, not the 1 fused
+    assert "ID=A;" in out and "ID=B;" in out
+    assert "FUSED" not in out
