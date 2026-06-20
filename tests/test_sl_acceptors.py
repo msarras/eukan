@@ -86,6 +86,27 @@ def test_iter_sl_ops_terminal_insertion_ignored():
     assert ops == []
 
 
+def test_iter_sl_ops_reverse_read_leading_clip():
+    # NODE_574: an antisense-assembled contig maps reverse yet carries its forward
+    # SL in the *leading* clip. Geometry (not is_reverse) makes it a '+' acceptor.
+    seg = _seg(16, 100, [(4, 16), (0, 20)], SL16 + "A" * 20)
+    ops = list(_iter_sl_ops(seg, min_clip_len=8, min_ins_len=10, scan_insertions=False))
+    assert ops == [(101, "+", SL16)]
+
+
+def test_iter_sl_ops_forward_read_trailing_clip():
+    # A forward read's trailing clip is now also examined → a '-' acceptor.
+    seg = _seg(0, 100, [(0, 20), (4, 16)], "A" * 20 + SL16)
+    ops = list(_iter_sl_ops(seg, min_clip_len=8, min_ins_len=10, scan_insertions=False))
+    assert ops == [(120, "-", SL16)]  # acceptor = reference_end
+
+
+def test_iter_sl_ops_both_terminal_clips():
+    seg = _seg(0, 100, [(4, 16), (0, 20), (4, 16)], SL16 + "A" * 20 + SL16)
+    ops = list(_iter_sl_ops(seg, min_clip_len=8, min_ins_len=10, scan_insertions=False))
+    assert ops == [(101, "+", SL16), (120, "-", SL16)]
+
+
 # --- build_joint_consensus -------------------------------------------------
 
 
@@ -153,6 +174,47 @@ def test_detect_clusters_and_unions_sources(tmp_path):
     assert len(plus) == 1
     assert plus[0].support == 2
     assert set(plus[0].sources) == {"reads", "rnaspades"}
+
+
+def test_detect_recovers_antisense_leading_clip(tmp_path):
+    """Fix A: a reverse-mapped de novo contig with its forward SL in the leading
+    clip (NODE_574) now yields a '+' acceptor — previously dropped because only the
+    trailing clip was inspected for reverse reads."""
+    cfg = _config(tmp_path, sl_sequence=SL16)
+    _make_bam(tmp_path / "rnaspades.genome.bam",
+              [("t1", 16, 100, [(4, 16), (0, 20)], SL16 + "A" * 20)])  # reverse, leading SL
+    detect_sl_acceptors(cfg)
+
+    sites = {(s.pos, s.strand): s for s in load_sl_acceptors(tmp_path / "sl_acceptors.gff3")}
+    assert (101, "+") in sites and sites[(101, "+")].sources == ("rnaspades",)
+
+
+def test_detect_matches_core_of_overlong_consensus(tmp_path):
+    """Fix B: a 25 nt read-verdict consensus is matched by its conserved 16 nt 3'
+    core, so a 17 nt captured leader carrying only the core is still detected."""
+    cfg = _config(tmp_path, sl_sequence="AAAGCTACAGTTTCTGTACTTTATT")  # core = GTTTCTGTACTTTATT
+    _make_bam(tmp_path / "rnaspades.genome.bam",
+              [("t1", 0, 100, [(4, 17), (0, 30)], "AGTTTCTGTACTTTATT" + "A" * 30)])
+    detect_sl_acceptors(cfg)
+
+    sites = {(s.pos, s.strand) for s in load_sl_acceptors(tmp_path / "sl_acceptors.gff3")}
+    assert (101, "+") in sites
+
+
+def test_detect_is_orientation_aware(tmp_path):
+    """A clip whose motif orientation contradicts its geometry strand is rejected;
+    a genuinely reverse-complement leader at a trailing clip is kept as '-'."""
+    from eukan.assembly.sl_depletion import _revcomp
+    cfg = _config(tmp_path, sl_sequence=SL16)
+    _make_bam(tmp_path / "rnaspades.genome.bam", [
+        ("wrong", 0, 100, [(0, 20), (4, 16)], "A" * 20 + SL16),            # fwd SL, '-' geom → drop
+        ("right", 0, 200, [(0, 20), (4, 16)], "A" * 20 + _revcomp(SL16)),  # RC SL, '-' geom → keep
+    ])
+    detect_sl_acceptors(cfg)
+
+    sites = {(s.pos, s.strand) for s in load_sl_acceptors(tmp_path / "sl_acceptors.gff3")}
+    assert (220, "-") in sites      # reference_end of the RC-leader read
+    assert (120, "-") not in sites  # forward SL at a trailing clip is not a '-' leader
 
 
 def test_detect_noop_without_signal(tmp_path):

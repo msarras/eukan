@@ -82,12 +82,15 @@ def _iter_sl_ops(
 ):
     """Yield ``(acceptor_1based, strand, bases)`` for each candidate SL op.
 
-    The candidates are the mRNA-5' soft-clip (the leader is a 5' addition) and,
-    when *scan_insertions*, every *internal* insertion. ``acceptor_1based`` is the
-    mature mRNA's first genomic base; ``strand`` is the gene strand inferred from
-    the read geometry; ``bases`` are the reference-forward clip/insertion bases to
-    test against the SL patterns (matched on both strands, so orientation of the
-    returned bases does not matter).
+    The candidates are *both* terminal soft-clips (the leader is a 5' addition, so
+    it surfaces at one end) and, when *scan_insertions*, every *internal* insertion.
+    ``acceptor_1based`` is the mature mRNA's first genomic base; ``strand`` is the
+    gene strand implied by the candidate's geometry — a leading clip / forward-read
+    insertion is a ``+`` acceptor, a trailing clip / reverse-read insertion a ``-``
+    one; ``bases`` are the reference-forward clip/insertion bases. The caller
+    confirms each candidate by matching ``bases`` against the SL motif in the
+    *strand-matching* orientation (``+`` → forward, ``-`` → reverse complement), so
+    a candidate whose motif orientation contradicts its geometry is dropped.
     """
     cigar = read.cigartuples
     seq = read.query_sequence
@@ -97,14 +100,21 @@ def _iter_sl_ops(
     rev = read.is_reverse
     ref_start = read.reference_start
 
-    # The SL sits at the mRNA 5' end: a leading soft-clip on a forward read, a
-    # trailing soft-clip on a reverse read. (reference_end is 0-based exclusive,
-    # i.e. the 1-based position of the last aligned base.)
+    # Test BOTH terminal soft-clips, not the one picked by ``read.is_reverse``: for
+    # the unstranded de novo contigs (and unstranded reads) this keys on, the BAM
+    # strand flag is the arbitrary assembly/mapping orientation, not the mRNA strand.
+    # A contig assembled antisense maps "reverse" yet carries its forward SL in the
+    # *leading* clip — the case that hid NODE_574's leader when only the trailing
+    # clip was inspected for reverse reads. Geometry pairs end with strand instead
+    # (leading → '+' acceptor at the first aligned base, trailing → '-' acceptor at
+    # the last); the caller's strand-matching motif check rejects any clip whose
+    # orientation contradicts its end. (reference_end is 0-based exclusive, i.e. the
+    # 1-based position of the last aligned base.)
     op0, len0 = cigar[0]
-    if not rev and op0 == _CIGAR_SOFT_CLIP and len0 >= min_clip_len:
+    if op0 == _CIGAR_SOFT_CLIP and len0 >= min_clip_len:
         yield ref_start + 1, "+", seq[:len0]
     op_last, len_last = cigar[-1]
-    if rev and op_last == _CIGAR_SOFT_CLIP and len_last >= min_clip_len:
+    if op_last == _CIGAR_SOFT_CLIP and len_last >= min_clip_len:
         yield ref_end, "-", seq[-len_last:]
 
     if not scan_insertions:
@@ -273,10 +283,21 @@ def detect_sl_acceptors(config: AssemblyConfig) -> None:
         _write_acceptors([], out)
         return
 
-    patterns = _variants(consensus, _MAX_MISMATCHES) | _variants(
-        _revcomp(consensus), _MAX_MISMATCHES
-    )
-    motif_len = len(consensus)
+    # Detect on the SL's conserved 3' core, not the full consensus. The leader is
+    # added 5'-of the acceptor, so its 3'-most bases (acceptor-adjacent) are the
+    # invariant part present on every trans-spliced 5' end, while the 5' part is the
+    # variable outron and is frequently truncated in capture. The consensus is
+    # oriented 5'->3' (mRNA sense), so the core is its 3' suffix. Matching the full
+    # consensus exactly would miss any leader captured shorter than it — e.g. a
+    # 25 nt read-verdict consensus vs a 17 nt clip still carrying the 16 nt core.
+    core = consensus[-_CONSENSUS_LEN:] if len(consensus) > _CONSENSUS_LEN else consensus
+    motif_len = len(core)
+    # Strand-resolved patterns: a '+' acceptor's leader reads forward in the genome,
+    # a '-' acceptor's as the reverse complement. _iter_sl_ops assigns strand from
+    # geometry; requiring the matching orientation per strand keeps a candidate whose
+    # motif orientation contradicts its geometry from being recorded mis-stranded.
+    fwd_patterns = _variants(core, _MAX_MISMATCHES)
+    rev_patterns = _variants(_revcomp(core), _MAX_MISMATCHES)
 
     raw: dict[tuple[str, str, int], tuple[int, set[str]]] = {}
 
@@ -294,6 +315,7 @@ def detect_sl_acceptors(config: AssemblyConfig) -> None:
                     min_ins_len=config.min_sl_insertion_len,
                     scan_insertions=scan_insertions,
                 ):
+                    patterns = fwd_patterns if strand == "+" else rev_patterns
                     if _find_sites(bases.upper(), patterns, motif_len):
                         support, sources = raw.get((chrom, strand, pos), (0, set()))
                         sources.add(source)
@@ -306,6 +328,7 @@ def detect_sl_acceptors(config: AssemblyConfig) -> None:
     sites = _consolidate(raw, window=config.sl_cluster_window)
     _write_acceptors(sites, out)
     log.info(
-        "SL acceptor detection: %d sites from %d raw positions (consensus %s).",
-        len(sites), len(raw), consensus,
+        "SL acceptor detection: %d sites from %d raw positions "
+        "(consensus %s, detected on 3' core %s).",
+        len(sites), len(raw), consensus, core,
     )
