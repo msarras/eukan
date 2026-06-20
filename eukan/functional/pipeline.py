@@ -20,6 +20,7 @@ switching modes doesn't quietly reuse stale results.
 from __future__ import annotations
 
 import gc
+import hashlib
 import json
 from pathlib import Path
 
@@ -49,6 +50,29 @@ def _homology_cache_path(config: FunctionalConfig) -> Path:
     stem = config.proteins.stem
     suffix = "kofam" if config.homology_db == "kofam" else "phmmer"
     return config.proteins.parent / f"{stem}.{suffix}.json"
+
+
+def _step_scope(config: FunctionalConfig) -> str:
+    """Per-(proteome, mode) discriminator that namespaces manifest step keys.
+
+    The search/annotate steps name their cache files and outputs after the
+    proteome stem, and the homology-DB mode selects the cache suffix, so two
+    different proteomes — or the same proteome run in two modes — already
+    write independent files into a shared work_dir. The manifest's
+    skip-if-complete check, however, keys only on the step name: without a
+    discriminator a second proteome inherits the first's "search complete"
+    record, the search is skipped, and the pipeline then crashes reading a
+    cache file that was never written for it.
+
+    Scoping every functional step key by ``(stem, mode, path-hash)`` keeps
+    resume correct for each proteome+mode while still skipping a genuine
+    re-run of the same one. The path hash disambiguates two proteomes that
+    share a stem but live in different directories (they have distinct cache
+    files, so they must not share a manifest record either).
+    """
+    suffix = "kofam" if config.homology_db == "kofam" else "phmmer"
+    digest = hashlib.md5(str(config.proteins.resolve()).encode()).hexdigest()[:8]
+    return f"{config.proteins.stem}.{suffix}.{digest}"
 
 
 def _run_uniprot_phmmer(
@@ -138,7 +162,16 @@ def run_functional_annotation(
     work_dir = config.work_dir
     manifest = get_or_create_manifest(work_dir, config)
 
-    expected = [step_key(FUNCTIONAL, s.name) for s in _STEPS]
+    # Namespace step keys per proteome+mode so several proteomes can be
+    # annotated in one work_dir without their manifest records colliding
+    # (see _step_scope). The step *dirs* stay unscoped — they only hold a
+    # transient .running sentinel, never the per-proteome outputs.
+    scope = _step_scope(config)
+
+    def _key(name: str) -> str:
+        return step_key(FUNCTIONAL, f"{name}.{scope}")
+
+    expected = [_key(s.name) for s in _STEPS]
     flag_map = {key: "--force" for key in expected}
     if not force:
         validate_or_raise(manifest, expected, flag_map)
@@ -149,7 +182,7 @@ def run_functional_annotation(
     hmmscan_json = config.proteins.parent / f"{config.proteins.stem}.hmmscan.json"
 
     run_orchestrated_step(
-        work_dir, manifest, step_key(FUNCTIONAL, "search"),
+        work_dir, manifest, _key("search"),
         _search_and_cache,
         config, homology_json, hmmscan_json,
         step_dir=work_dir / "search",
@@ -160,7 +193,7 @@ def run_functional_annotation(
     hmmscan_res = json.loads(hmmscan_json.read_text())
 
     run_orchestrated_step(
-        work_dir, manifest, step_key(FUNCTIONAL, "annotate_fasta"),
+        work_dir, manifest, _key("annotate_fasta"),
         annotate_fasta, config.proteins, homology_res, hmmscan_res,
         config.homology_db,
         step_dir=work_dir / "annotate_fasta",
@@ -169,7 +202,7 @@ def run_functional_annotation(
 
     if config.gff3_path:
         run_orchestrated_step(
-            work_dir, manifest, step_key(FUNCTIONAL, "annotate_gff3"),
+            work_dir, manifest, _key("annotate_gff3"),
             annotate_gff3, config.gff3_path, homology_res, hmmscan_res,
             work_dir, config.homology_db,
             step_dir=work_dir / "annotate_gff3",
