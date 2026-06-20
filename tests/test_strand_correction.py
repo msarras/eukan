@@ -67,12 +67,21 @@ def test_parse_hits(tmp_path):
     p = tmp_path / "hits.tsv"
     p.write_text(
         "# comment\n"
-        "st:T1\tsp|P1\t120.5\n"
-        "st:T1\tsp|P9\t90.0\n"   # second hit for same query, still one id
-        "rs:N2\tsp|P2\t77.0\n"
+        "st:T1\tsp|P1\t120.5\t2\n"   # best for T1 (forward frame)
+        "st:T1\tsp|P9\t90.0\t-1\n"   # lower bitscore for same query -> ignored
+        "rs:N2\tsp|P2\t77.0\t-3\n"   # reverse-frame hit
         "shortrow\n"
     )
-    assert sc.parse_hits(p) == {"st:T1", "rs:N2"}
+    assert sc.parse_hits(p) == {"st:T1": 2, "rs:N2": -3}
+
+
+def test_coding_strand():
+    assert sc._coding_strand("+", 2) == "+"
+    assert sc._coding_strand("+", -1) == "-"
+    assert sc._coding_strand("-", 1) == "-"   # reverse-labelled query, forward frame
+    assert sc._coding_strand("-", -2) == "+"  # antisense-assembled rescue
+    assert sc._coding_strand(".", 3) == "+"   # '.' stitched forward, like '+'
+    assert sc._coding_strand(".", -3) == "-"
 
 
 def test_introns_of():
@@ -126,37 +135,60 @@ def _decide_contigs(tmp_path) -> ContigIndex:
 def test_decide_hit_keeps_label(tmp_path):
     with _decide_contigs(tmp_path) as c:
         tx = _Tx("a", "plus", "+", "src", [(1, 40), (51, 90)])
-        assert sc._decide(tx, True, "GT-AG", "CT-AC", c) == ("+", "keep")
+        assert sc._decide(tx, "+", "GT-AG", "CT-AC", c) == ("+", "keep")
 
 
 def test_decide_hit_resolves_dot_to_plus(tmp_path):
     with _decide_contigs(tmp_path) as c:
         tx = _Tx("a", "plus", ".", "src", [(1, 40), (51, 90)])
-        assert sc._decide(tx, True, "GT-AG", "CT-AC", c) == ("+", "assign")
+        assert sc._decide(tx, "+", "GT-AG", "CT-AC", c) == ("+", "assign")
+
+
+def test_decide_hit_flips_antisense(tmp_path):
+    # Fix A: a frame-derived coding strand opposite the label flips the model
+    # (the NODE_574 case: antisense-assembled contig, label '-', coding '+').
+    with _decide_contigs(tmp_path) as c:
+        tx = _Tx("a", "plus", "-", "src", [(1, 40), (51, 90)])
+        assert sc._decide(tx, "+", "GT-AG", "CT-AC", c) == ("+", "flip")
 
 
 def test_decide_flips_reverse_twin(tmp_path):
     with _decide_contigs(tmp_path) as c:
         tx = _Tx("a", "twin", "+", "src", [(1, 40), (51, 90)])
-        assert sc._decide(tx, False, "GT-AG", "CT-AC", c) == ("-", "flip")
+        assert sc._decide(tx, None, "GT-AG", "CT-AC", c) == ("-", "flip")
+
+
+def test_decide_canonical_votes_when_dominant_noncanonical(tmp_path):
+    # Fix B: canonical GT-AG introns still vote even when the learned dominant is a
+    # non-canonical motif (CG-AG) they don't match -- previously this was ambiguous.
+    with _decide_contigs(tmp_path) as c:
+        tx = _Tx("a", "plus", "-", "src", [(1, 40), (51, 90)])  # GT-AG intron
+        assert sc._decide(tx, None, "CG-AG", "CT-CG", c) == ("+", "flip")
+
+
+def test_decide_canonical_twin_votes_minus(tmp_path):
+    # Fix B: the +genome CT-AC twin votes '-' even under a non-canonical dominant.
+    with _decide_contigs(tmp_path) as c:
+        tx = _Tx("a", "twin", "+", "src", [(1, 40), (51, 90)])  # CT-AC intron
+        assert sc._decide(tx, None, "CG-AG", "CT-CG", c) == ("-", "flip")
 
 
 def test_decide_assigns_dot_from_consensus(tmp_path):
     with _decide_contigs(tmp_path) as c:
         tx = _Tx("a", "plus", ".", "src", [(1, 40), (51, 90)])
-        assert sc._decide(tx, False, "GT-AG", "CT-AC", c) == ("+", "assign")
+        assert sc._decide(tx, None, "GT-AG", "CT-AC", c) == ("+", "assign")
 
 
 def test_decide_monoexon_left_alone(tmp_path):
     with _decide_contigs(tmp_path) as c:
         tx = _Tx("a", "plus", "+", "src", [(1, 90)])
-        assert sc._decide(tx, False, "GT-AG", "CT-AC", c) == ("+", "mono-exon")
+        assert sc._decide(tx, None, "GT-AG", "CT-AC", c) == ("+", "mono-exon")
 
 
 def test_decide_ambiguous_left_alone(tmp_path):
     with _decide_contigs(tmp_path) as c:
         tx = _Tx("a", "mixed", "+", "src", [(1, 40), (51, 90), (101, 140)])
-        assert sc._decide(tx, False, "GT-AG", "CT-AC", c) == ("+", "ambiguous")
+        assert sc._decide(tx, None, "GT-AG", "CT-AC", c) == ("+", "ambiguous")
 
 
 # --------------------------------------------------------------------------- #
@@ -180,13 +212,17 @@ def test_run_corrects_strands(tmp_path, monkeypatch):
         _gtf_tx("chrA", "T_confirmed_plus", "+", [(1, 40), (51, 90)])
         + _gtf_tx("chrB", "T_wrong", "+", [(1, 40), (51, 90)])
         + _gtf_tx("chrC", "T_dot", ".", [(1, 40), (51, 90)])
+        + _gtf_tx("chrA", "T_antisense", "-", [(1, 40), (51, 90)])
         + _gtf_tx("chrD", "T_mono", "+", [(1, 90)])
     )
 
     def fake_run_cmd(cmd, **kw):
         if "blastx" in cmd:
             out = cmd[cmd.index("--out") + 1]
-            Path(out).write_text("st:T_confirmed_plus\tsp|P1\t150.0\n")
+            Path(out).write_text(
+                "st:T_confirmed_plus\tsp|P1\t150.0\t1\n"   # forward frame -> '+'
+                "st:T_antisense\tsp|P2\t140.0\t-1\n"        # reverse frame on '-' -> flip '+'
+            )
 
     monkeypatch.setattr(sc, "run_cmd", fake_run_cmd)
 
@@ -197,9 +233,10 @@ def test_run_corrects_strands(tmp_path, monkeypatch):
     assert out.exists()
     strands = {m.tid: m.strand for m in _parse_transcript_models(out)}
     assert strands == {
-        "T_confirmed_plus": "+",  # hit → kept
-        "T_wrong": "-",           # CT-AC twin → flipped
+        "T_confirmed_plus": "+",  # forward-frame hit → kept
+        "T_wrong": "-",           # CT-AC twin → flipped by vote
         "T_dot": "+",             # consensus assigns +
+        "T_antisense": "+",       # reverse-frame hit → homology flip
         "T_mono": "+",            # single exon → untouched
     }
 
@@ -207,7 +244,7 @@ def test_run_corrects_strands(tmp_path, monkeypatch):
     decisions = {row.split("\t")[1]: row.split("\t")[5] for row in audit[1:]}
     assert decisions == {
         "T_confirmed_plus": "keep", "T_wrong": "flip",
-        "T_dot": "assign", "T_mono": "mono-exon",
+        "T_dot": "assign", "T_antisense": "flip", "T_mono": "mono-exon",
     }
 
 

@@ -7,15 +7,19 @@ true splice consensus is non-canonical, and unrecoverable from the BAM alone (th
 unstranded junction set is strand-symmetric: every motif appears with its
 reverse-complement twin).
 
-This module breaks that symmetry with protein homology. It runs forward-frame-only
-``diamond blastx`` (``--strand plus``) of the assembled transcripts against
-SwissProt; a transcript can only hit in a forward frame if its strand label is
-*already* the coding orientation, so the hit-bearing ("confirmed") transcripts
-yield a clean, organism-calibrated dominant splice consensus ``D``. Every other
-multi-exon transcript is then re-stranded by majority vote over its introns: a
-``+``-genome donor-acceptor reading equal to ``D`` votes ``+``; equal to the
-RC-twin of ``D`` votes ``-``. Mono-exonic and unconfirmed-ambiguous transcripts
-are left for the SL cut to orient. Correction only ever rewrites the strand field
+This module breaks that symmetry with protein homology. It runs ``diamond blastx``
+(``--strand both``) of the assembled transcripts against SwissProt; the query
+*frame* of each hit gives the coding strand outright — a positive frame means the
+labelled orientation is coding, a negative frame means its reverse complement is.
+A hit therefore both confirms *or flips* the label (so an antisense-assembled de
+novo contig is rescued, not just a forward-labelled one) and, read on that coding
+strand, calibrates the organism's dominant splice consensus ``D``. Every other
+multi-exon transcript is re-stranded by majority vote over its introns: a
+``+``-genome donor-acceptor reading equal to ``D`` *or* to canonical ``GT-AG``
+votes ``+``; equal to the RC-twin of ``D`` *or* to ``CT-AC`` votes ``-`` (the
+canonical pair is always strand-informative, so it is counted even when ``D`` is
+non-canonical). Mono-exonic and tied transcripts are left for the SL cut to orient.
+Correction only ever rewrites the strand field
 (coordinates are untouched), and combinr's FASTA emitter reverse-complements on
 ``-``, so a flipped strand yields correctly oriented evidence automatically.
 
@@ -66,8 +70,11 @@ _AUDIT_TSV = "strand_correction.tsv"
 _DIAMOND_BLOCK_SIZE = "1.0"
 _DIAMOND_INDEX_CHUNKS = "4"
 
-# Fallback consensus when too few confirmed introns calibrate one.
+# Fallback consensus when too few confirmed introns calibrate one. The canonical
+# pair is always strand-informative (GT-AG on +genome => + coding; its +genome
+# RC-twin CT-AC => - coding), so the vote counts it alongside the learned dominant.
 _CANONICAL = "GT-AG"
+_CANONICAL_RC = "CT-AC"  # == _rc_swap(_CANONICAL)
 
 
 # ---------------------------------------------------------------------------
@@ -75,19 +82,41 @@ _CANONICAL = "GT-AG"
 # ---------------------------------------------------------------------------
 
 
-def parse_hits(path: Path) -> set[str]:
-    """Query ids with a blastx hit, from a BLAST-tabular file.
+def parse_hits(path: Path) -> dict[str, int]:
+    """Map each query id to the query frame of its best (highest-bitscore) hit.
 
-    Tool-agnostic (qid is column 1). diamond's ``--evalue`` has already filtered to
-    significant hits, so any reported query is "confirmed". Comment/short rows skip.
+    Tabular columns are ``qseqid sseqid bitscore qframe`` (diamond ``--outfmt 6``).
+    The ``qframe`` sign encodes which query strand coded the hit: positive ⟹ the
+    query as supplied (its labelled orientation) is coding; negative ⟹ its reverse
+    complement is. diamond's ``--evalue`` has already filtered to significant hits,
+    so any reported query is "confirmed". Comment/short rows skip.
     """
-    hits: set[str] = set()
+    best: dict[str, tuple[float, int]] = {}
     with path.open() as fh:
         for row in csv.reader(fh, delimiter="\t"):
-            if len(row) < 2 or row[0].startswith("#"):
+            if len(row) < 4 or row[0].startswith("#"):
                 continue
-            hits.add(row[0])
-    return hits
+            try:
+                bitscore, qframe = float(row[2]), int(row[3])
+            except ValueError:
+                continue
+            qid = row[0]
+            if qid not in best or bitscore > best[qid][0]:
+                best[qid] = (bitscore, qframe)
+    return {qid: qframe for qid, (_bs, qframe) in best.items()}
+
+
+def _coding_strand(label: str, qframe: int) -> str:
+    """The coding strand implied by a blastx hit's query frame on a labelled query.
+
+    The query was stitched in its labelled orientation (``.`` forward, like ``+``),
+    so a positive ``qframe`` means that orientation is coding and a negative one
+    means its reverse complement is. Returns ``"+"`` or ``"-"``.
+    """
+    base = label if label in ("+", "-") else "+"
+    if qframe > 0:
+        return base
+    return "-" if base == "+" else "+"
 
 
 def introns_of(exons: list[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -138,27 +167,32 @@ def _stitch(tx: _Tx, contigs: ContigIndex) -> str:
 
 
 def _decide(
-    tx: _Tx, hit: bool, dominant: str, rc: str, contigs: ContigIndex
+    tx: _Tx, hit_coding: str | None, dominant: str, rc: str, contigs: ContigIndex
 ) -> tuple[str, str]:
     """Return ``(new_strand, decision)`` for one transcript.
 
-    A forward hit means the current label is already coding-correct (a ``.`` then
-    resolves to ``+``). Otherwise a multi-exon transcript is voted: ``+``-genome
-    introns matching *dominant* vote ``+``, matching its RC-twin *rc* vote ``-``;
-    the majority wins. Mono-exonic / tied transcripts are left for the SL cut.
+    A blastx hit gives the coding strand outright (*hit_coding*, derived from the
+    query frame), so the label is set to it — homology can now *flip* an
+    antisense-assembled contig, not just confirm a forward label (a ``.`` resolves
+    to whichever strand coded the hit). Otherwise a multi-exon transcript is voted
+    over its introns: a ``+``-genome donor-acceptor equal to *dominant* or to
+    canonical ``GT-AG`` votes ``+``; equal to its RC-twin *rc* or to ``CT-AC`` votes
+    ``-``; the majority wins. Mono-exonic / tied transcripts are left for the SL cut.
     """
-    if hit:
-        new = tx.strand if tx.strand in ("+", "-") else "+"
-        return new, ("keep" if new == tx.strand else "assign")
+    if hit_coding is not None:
+        new = hit_coding
+        if new == tx.strand:
+            return new, "keep"
+        return new, ("assign" if tx.strand not in ("+", "-") else "flip")
     introns = introns_of(tx.exons)
     if not introns:
         return tx.strand, "mono-exon"
     plus = minus = 0
     for istart, iend in introns:
         raw = _dinucleotide(contigs, tx.chrom, istart, iend)
-        if raw == dominant:
+        if raw in (dominant, _CANONICAL):
             plus += 1
-        elif raw == rc:
+        elif raw in (rc, _CANONICAL_RC):
             minus += 1
     if plus == minus:
         return tx.strand, "ambiguous"
@@ -253,7 +287,9 @@ def run_strand_correction(config: AssemblyConfig) -> None:
     db = _resolve_diamond_db(config)
 
     with ContigIndex(config.genome) as contigs:
-        # 4. Forward-frame blastx -> confirmed (coding-orientation) transcript ids.
+        # 4. Both-strand blastx -> per-hit query frame -> the coding strand of each
+        #    confirmed transcript (positive frame = label is coding, negative = its
+        #    reverse complement is). This both confirms and flips labels.
         query = wd / _QUERY_FASTA
         with open(query, "w") as fh:
             for tag, models in models_by_tag.items():
@@ -264,28 +300,36 @@ def run_strand_correction(config: AssemblyConfig) -> None:
              "--db", db,
              "--query", str(query),
              "--out", str(wd / _HITS_TSV),
-             "--strand", "plus",
+             "--strand", "both",
              "--query-gencode", str(config.genetic_code_obj.ncbi_id),
              "--evalue", f"{config.strand_blastx_evalue:g}",
              "--max-target-seqs", "1",
-             "--outfmt", "6", "qseqid", "sseqid", "bitscore",
+             "--outfmt", "6", "qseqid", "sseqid", "bitscore", "qframe",
              "--block-size", _DIAMOND_BLOCK_SIZE,
              "--index-chunks", _DIAMOND_INDEX_CHUNKS,
              "--threads", str(config.num_cpu),
              "--quiet"],
             cwd=wd,
         )
-        confirmed = parse_hits(wd / _HITS_TSV)
+        frames = parse_hits(wd / _HITS_TSV)
+        coding: dict[str, str] = {}
+        for tag, models in models_by_tag.items():
+            for tx in models:
+                qid = f"{tag}:{tx.tid}"
+                if qid in frames:
+                    coding[qid] = _coding_strand(tx.strand, frames[qid])
 
-        # 5. Learn the dominant coding-strand splice consensus from confirmed introns.
+        # 5. Learn the dominant splice consensus from confirmed introns, read on the
+        #    homology-determined coding strand (not the original label).
         tally: Counter[str] = Counter()
         for tag, models in models_by_tag.items():
             for tx in models:
-                if f"{tag}:{tx.tid}" not in confirmed:
+                cstrand = coding.get(f"{tag}:{tx.tid}")
+                if cstrand is None:
                     continue
                 for istart, iend in introns_of(tx.exons):
                     motif = consensus_on_strand(
-                        _dinucleotide(contigs, tx.chrom, istart, iend), tx.strand
+                        _dinucleotide(contigs, tx.chrom, istart, iend), cstrand
                     )
                     if motif:
                         tally[motif] += 1
@@ -298,7 +342,7 @@ def run_strand_correction(config: AssemblyConfig) -> None:
             )
         log.info(
             "Strand consensus %s (rc-twin %s); %d confirmed transcripts, %d introns.",
-            dominant, rc, len(confirmed), total,
+            dominant, rc, len(coding), total,
         )
 
         # 6. Correct each transcript; write stranded models + the audit TSV.
@@ -308,14 +352,15 @@ def run_strand_correction(config: AssemblyConfig) -> None:
             for tag, _inp, out in sets:
                 models = models_by_tag[tag]
                 for tx in models:
-                    hit = f"{tag}:{tx.tid}" in confirmed
+                    hit_coding = coding.get(f"{tag}:{tx.tid}")
                     n_introns = len(introns_of(tx.exons))
-                    new, decision = _decide(tx, hit, dominant, rc, contigs)
+                    new, decision = _decide(tx, hit_coding, dominant, rc, contigs)
                     counts[decision] += 1
                     old = tx.strand
                     tx.strand = new
                     tsv.write(
-                        f"{tag}\t{tx.tid}\t{n_introns}\t{old}\t{new}\t{decision}\t{int(hit)}\n"
+                        f"{tag}\t{tx.tid}\t{n_introns}\t{old}\t{new}\t{decision}"
+                        f"\t{int(hit_coding is not None)}\n"
                     )
                 _write_transcript_models_gff3(models, out)
 
