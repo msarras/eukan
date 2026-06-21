@@ -330,6 +330,12 @@ class AssemblyConfig(_StepRunSettings):
     """StringTie ``-f``: minimum isoform abundance as a fraction of a locus's
     dominant isoform. Raised above StringTie's default of 0.01 to drop minor
     noise isoforms that inflate the genome-guided set."""
+    stringtie_min_junction_coverage: float = 1.0
+    """StringTie ``-j``: minimum number of spliced reads spanning a junction for it
+    to be kept. Left at StringTie's default of 1, but exposed so it can be raised:
+    a single spurious junction read (e.g. from noisy mapping in dense or
+    trans-spliced genomes) otherwise becomes a splice-graph edge and inflates
+    isoforms / fuses neighbouring loci."""
 
     # --- de novo + combinr consolidation routine (replaces PASA) ---
     rnaspades: bool = True

@@ -95,12 +95,13 @@ def _max_intron_scalar(config: AssemblyConfig) -> list[str]:
 
 
 def _stringtie_scalars(config: AssemblyConfig) -> list[str]:
-    # StringTie reads a max-intron-bounded BAM and runs at a configurable -c/-f
+    # StringTie reads a max-intron-bounded BAM and runs at a configurable -c/-f/-j
     # stringency; changing any of these re-assembles the genome-guided set.
     return [
         f"max_intron_len={config.max_intron_len}",
         f"stringtie_min_coverage={config.stringtie_min_coverage}",
         f"stringtie_min_isoform_fraction={config.stringtie_min_isoform_fraction}",
+        f"stringtie_min_junction_coverage={config.stringtie_min_junction_coverage}",
     ]
 
 
