@@ -82,6 +82,12 @@ from eukan.cli._framework import (
     help="Run rnaSPAdes de novo assembly (the de novo source; consolidated by combinr).",
 )
 @optgroup.option(
+    "--stringtie-min-junction", type=float, default=None,
+    help="StringTie -j: minimum spliced reads spanning a junction to keep it "
+    "(default 1). Raise it to drop single-read spurious junctions that inflate "
+    "isoforms / fuse neighbouring loci in noisy, dense, or trans-spliced genomes.",
+)
+@optgroup.option(
     "--sl-sequence", default=None,
     help="Override the spliced-leader sequence for trans-splice acceptor detection "
     "(else recovered from the read soft-clip verdict or de novo insertions).",
@@ -160,6 +166,7 @@ def assemble(
     run_combinr: bool,
     jaccard_clip: bool,
     rnaspades: bool,
+    stringtie_min_junction: float | None,
     sl_sequence: str | None,
     sl_cluster_window: int,
     combinr_path: Path | None,
@@ -212,6 +219,7 @@ def assemble(
         align_mode=align_mode,
         jaccard_clip=jaccard_clip,
         rnaspades=rnaspades,
+        stringtie_min_junction_coverage=stringtie_min_junction,
         sl_sequence=sl_sequence,
         sl_cluster_window=sl_cluster_window,
         combinr_path=resolve_optional_path(combinr_path),
