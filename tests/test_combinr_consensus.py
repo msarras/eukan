@@ -1,4 +1,4 @@
-"""Unit tests for eukan.annotation.combinr_consensus (the EVM alternative)."""
+"""Unit tests for eukan.annotation.combinr_consensus (the consensus engine)."""
 
 from __future__ import annotations
 
@@ -206,7 +206,26 @@ def test_run_combinr_consensus_command_with_transcripts(tmp_path, monkeypatch):
     assert cmd[cmd.index("--protein-alignments") + 1] == "prot.match.gff3"
     assert cmd[cmd.index("--transcript-alignments") + 1] == "transcripts.match.gff3"
     assert "--alt-splice" in cmd
+    # stringent-overlap accompanies the alt-splice isoform grouping; 0.0 = off default.
+    assert cmd[cmd.index("--stringent-overlap") + 1] == "0.0"
     assert kw["out_file"] == "consensus_models.gff3"
+
+
+def test_run_combinr_consensus_passes_stringent_overlap(tmp_path, monkeypatch):
+    sdir = tmp_path / "evm_consensus_models"
+    sdir.mkdir()
+    src = tmp_path / "src"
+    src.mkdir()
+    prot = _prot_gff(src / "prot.gff3")
+    aug = _pred_gff(src / "augustus.gff3", "augustus")
+    nr = _nr_gff(src / "nr.gff3")
+    cfg = _with_transcripts(tmp_path, nr, combinr_stringent_overlap=30.0)
+
+    calls = _capture_run_cmd(monkeypatch)
+    run_combinr_consensus(cfg, sdir, [prot, aug], transcripts=nr)
+
+    cmd, _ = calls[0]
+    assert cmd[cmd.index("--stringent-overlap") + 1] == "30.0"
 
 
 def test_run_combinr_consensus_command_without_transcripts(tmp_path, monkeypatch):
@@ -224,6 +243,7 @@ def test_run_combinr_consensus_command_without_transcripts(tmp_path, monkeypatch
     cmd, _ = calls[0]
     assert "--transcript-alignments" not in cmd
     assert "--alt-splice" not in cmd
+    assert "--stringent-overlap" not in cmd  # rides with the alt-splice grouping only
     assert "--protein-alignments" in cmd  # protein evidence still passed
 
 
@@ -289,7 +309,7 @@ def test_combinr_handoff_preserves_isoforms_and_implicit_utr(tmp_path, monkeypat
         return sdir / "consensus_models.gff3"
 
     monkeypatch.setattr(cons, "run_combinr_consensus", fake)
-    cfg = _config(tmp_path, consensus_engine="combinr")
+    cfg = _config(tmp_path)
     ev = tmp_path / "prot.gff3"
     ev.touch()
 
@@ -347,7 +367,7 @@ def test_combinr_consensus_end_to_end(tmp_path):
 
     cfg = PipelineConfig(
         genome=tmp_path / "genome.fa", proteins=[tmp_path / "proteins.faa"],
-        work_dir=tmp_path, num_cpu=2, consensus_engine="combinr", combinr_path=_COMBINR,
+        work_dir=tmp_path, num_cpu=2, combinr_path=_COMBINR,
         transcripts_fasta=tmp_path / "nr_transcripts.fasta", transcripts_gff=nr,
         rnaseq_hints=tmp_path / "hints.gff",
     )

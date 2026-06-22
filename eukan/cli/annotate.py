@@ -45,13 +45,14 @@ from eukan.cli._framework import (
     show_default=True,
     help="Weights for evidence sources: protein, gene predictions, transcripts.",
 )
-@code_option(default=11)
 @optgroup.option(
-    "--consensus-engine", type=click.Choice(["evm", "combinr"], case_sensitive=False),
-    default="evm", show_default=True,
-    help="Consensus model builder: EVM, or combinr consensus (folds in UTRs/isoforms, "
-    "replacing the PASA UTR step).",
+    "--combinr-stringent-overlap", type=float, default=None,
+    help="combinr --stringent-overlap for the consensus --alt-splice isoform grouping "
+    "(PASA --stringent_alignment_overlap): two transcript isoforms attach to one gene "
+    "only when their span overlap is >= this percent of the shorter (default 0 = any "
+    "overlap). Raise it (e.g. 30) to keep tip-overlapping collinear neighbours separate.",
 )
+@code_option(default=11)
 @optgroup.group("Override options")
 @optgroup.option(
     "--transcripts-fasta", "-tf", type=click.Path(exists=True, path_type=Path),
@@ -67,13 +68,8 @@ from eukan.cli._framework import (
 )
 @optgroup.option("--strand-specific", is_flag=True, help="Transcripts are strand-oriented.")
 @optgroup.option(
-    "--utrs", type=click.Path(exists=True, path_type=Path),
-    help="PASA SQLite database path for adding UTRs (EVM engine only).",
-)
-@optgroup.option(
     "--combinr-path", type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Path to the combinr binary (default: 'combinr' on PATH). "
-    "Used with --consensus-engine combinr.",
+    help="Path to the combinr binary (default: 'combinr' on PATH).",
 )
 @optgroup.option(
     "--splice-permissive", is_flag=True, default=False,
@@ -91,7 +87,7 @@ from eukan.cli._framework import (
 @optgroup.option("--run-prot-align", is_flag=True, help="Force re-run protein alignment (spaln/gth).")
 @optgroup.option("--run-augustus", is_flag=True, help="Force re-run AUGUSTUS training and prediction.")
 @optgroup.option("--run-snap", is_flag=True, help="Force re-run SNAP (and CodingQuarry) prediction.")
-@optgroup.option("--run-consensus", is_flag=True, help="Force re-run EVM consensus model building.")
+@optgroup.option("--run-consensus", is_flag=True, help="Force re-run consensus model building.")
 def annotate(
     genome: Path,
     proteins: tuple[Path, ...],
@@ -105,9 +101,8 @@ def annotate(
     numcpu: int,
     weights: tuple[int, ...],
     code: int,
-    consensus_engine: str,
     combinr_path: Path | None,
-    utrs: Path | None,
+    combinr_stringent_overlap: float | None,
     kingdom: str | None,
     run_genemark: bool,
     run_prot_align: bool,
@@ -120,8 +115,7 @@ def annotate(
     \b
     When run in the same directory as `eukan assemble`, transcript evidence
     (FASTA, GFF3, RNA-seq hints) and strand-specificity are discovered
-    automatically. A PASA database for UTR addition is also detected if
-    present. Use the override options to supply your own files or to
+    automatically. Use the override options to supply your own files or to
     replace the auto-discovered values.
     """
     from eukan.annotation import run_annotation_pipeline
@@ -139,8 +133,8 @@ def annotate(
         num_cpu=numcpu,
         genetic_code=str(code),
         weights=list(weights),
-        consensus_engine=consensus_engine,
         combinr_path=resolve_optional_path(combinr_path),
+        combinr_stringent_overlap=combinr_stringent_overlap,
         strand_specific=strand_specific,
         allow_noncanonical_splice=splice_permissive,
         spaln_ssp=spsp,
@@ -148,7 +142,6 @@ def annotate(
         transcripts_fasta=resolve_optional_path(transcripts_fasta),
         transcripts_gff=resolve_optional_path(transcripts_gff),
         rnaseq_hints=resolve_optional_path(rnaseq_hints),
-        utrs_db=resolve_optional_path(utrs),
     ))
 
     force_steps = force_steps_from_run_flags(

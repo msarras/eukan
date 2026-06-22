@@ -5,10 +5,10 @@ captures non-canonical introns (e.g. the dominant CG-AG introns of diplonemids
 such as *Hemistasia*) that STAR would miss or misplace. segemehl has no native
 splice-junction table, so we derive a STAR-format ``SJ.out.tab`` from the BAM's
 N-CIGAR junctions (:func:`align_hints.sj_table_from_bam`) and reuse the shared
-post-alignment processing verbatim. Downstream steps (GeneMark, AUGUSTUS,
-Trinity, PASA) therefore see the identical contract STAR produces — including
-the ``splice_site_summary.json`` that lets AUGUSTUS allow the non-canonical
-splice sites via ``--allow_hinted_splicesites``.
+post-alignment processing verbatim. Downstream steps (GeneMark, AUGUSTUS, and
+transcript assembly) therefore see the identical contract STAR produces —
+including the ``splice_site_summary.json`` that lets AUGUSTUS allow the
+non-canonical splice sites via ``--allow_hinted_splicesites``.
 """
 
 from __future__ import annotations
@@ -59,6 +59,33 @@ def _bam_is_complete(path: Path) -> bool:
     except ExternalToolError:
         return False
     return True
+
+
+def _write_unmapped_fasta(unsorted_bam: Path, out_fasta: Path) -> int:
+    """Extract unmapped records from *unsorted_bam* to *out_fasta* (FASTA).
+
+    The segemehl transcript BAM keeps unmapped queries before the ``-F 4`` filter
+    drops them; pulling them out here (pysam, no samtools dependency) preserves the
+    transcripts that failed to map for inspection, matching what the STARlong path
+    saves via ``--outReadsUnmapped``. Returns the number written.
+    """
+    import pysam
+
+    n = 0
+    bam = pysam.AlignmentFile(str(unsorted_bam), "rb")
+    try:
+        with open(out_fasta, "w") as fh:
+            for read in bam:
+                if not read.is_unmapped or read.is_secondary or read.is_supplementary:
+                    continue
+                seq = read.query_sequence
+                if not read.query_name or not seq:
+                    continue
+                fh.write(f">{read.query_name}\n{seq}\n")
+                n += 1
+    finally:
+        bam.close()
+    return n
 
 
 def _coordinate_sort_and_filter(
@@ -186,90 +213,77 @@ def map_reads_segemehl(config: AssemblyConfig) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Transcript -> genome mapping (feeds the combinr consolidation step)
+# Transcript -> genome mapping config (consumed by star.map_transcripts)
 # ---------------------------------------------------------------------------
-
-_TX_INDEX = "segemehl_tx.idx"
-# (query FASTA, output BAM) for each assembly. The de novo assemblies are
-# SL-depleted upstream (Phase 3); genome-guided Trinity is mapped as-is.
+# De novo transcripts are mapped to the genome SPLICED (bounded intron + Local
+# soft-clip). The dispatcher (eukan.assembly.star.map_transcripts) uses STARlong
+# by default, with segemehl `-S` (`-H 1`, see map_one_transcript_set_segemehl) as
+# the fallback when STARlong fails/under-maps — and as the *primary* mapper when
+# non-canonical splicing is extensive (or --aligner segemehl). These (query FASTA,
+# output BAM) pairs and the jaccard-sibling resolver are shared across both paths.
 _TRANSCRIPT_SETS: tuple[tuple[str, str], ...] = (
-    ("trinity-gg.fasta", "trinity-gg.genome.bam"),
-    ("trinity-denovo.sl_depleted.fasta", "trinity-denovo.genome.bam"),
-    ("rnaspades.sl_depleted.fasta", "rnaspades.genome.bam"),
+    ("rnaspades.fasta", "rnaspades.genome.bam"),
 )
 _GENOME_BAM_SUFFIX = ".genome.bam"
 
 
-def _map_one_transcript_set(
-    config: AssemblyConfig, index: Path, query: Path, out_bam: str
-) -> None:
-    """Map one assembly's transcripts to the genome → sorted, indexed *out_bam*."""
+def _resolve_query(wd: Path, query_name: str) -> Path:
+    """The transcript FASTA to map: the jaccard-clipped sibling if it exists.
+
+    The jaccard step (``assembly/jaccard.py``) rewrites each de novo / genome-
+    guided FASTA into a ``<stem>.jaccard.fasta``; prefer it so fused contigs are
+    split before consolidation. Falls back to the original when clipping is off.
+    """
+    clipped = wd / query_name.replace(".fasta", ".jaccard.fasta")
+    return clipped if clipped.exists() and clipped.stat().st_size > 0 else wd / query_name
+
+
+_TX_INDEX = "segemehl_tx.idx"
+_TX_SPLITS_BASE = "segemehl_tx_splits"
+
+
+def map_one_transcript_set_segemehl(config: AssemblyConfig, query: Path, out_bam: str) -> None:
+    """Spliced fallback for transcript->genome mapping (used when STARlong fails).
+
+    segemehl ``-S`` natively splits long transcripts at introns, recovering the
+    splice structure STAR can miss on long queries. ``-H 1`` (report only the best
+    alignment) bounds the split-DP memory that ``-H 0`` blew past on this box; we
+    extract the unmapped transcripts (for inspection — mirrors the STARlong primary
+    path), then drop unmapped reads and coordinate-sort/index like the read path.
+    """
     wd = config.work_dir
     final = wd / out_bam
     if _bam_is_complete(final):
         log.info("Reusing %s; skipping segemehl transcript mapping.", final.name)
         return
 
-    stem = out_bam[: -len(_GENOME_BAM_SUFFIX)]
-    unsorted = wd / f"{stem}.genome.unsorted.bam"
-    splits_base = wd / f"{stem}_splits"
-    if not _bam_is_complete(unsorted):
-        # Same recipe as the read mapper plus `-e` (brief M-only CIGAR so combinr
-        # and samtools parse standard ops): `-H 0` reports all alignments
-        # (multi-copy genes map to several loci), `-S` enables split/spliced
-        # mapping (transcripts span introns; trans-spliced ones split across
-        # loci). One transcript == one query record, so `-q` takes the FASTA.
-        run_cmd(
-            [
-                "segemehl.x",
-                "-H", "0",
-                "-e",
-                "-i", str(index),
-                "-d", str(config.genome),
-                "-q", str(query),
-                "-S", str(splits_base),
-                "-t", str(config.num_cpu),
-                "-b",
-                "-o", str(unsorted),
-            ],
-            cwd=wd,
-        )
-
-    _coordinate_sort_and_filter(unsorted, out_bam, wd, config.num_cpu)
-    run_cmd(["samtools", "index", out_bam], cwd=wd)
-    unsorted.unlink(missing_ok=True)
-    for suffix in _SPLITS_SUFFIXES:
-        Path(f"{splits_base}{suffix}").unlink(missing_ok=True)
-
-
-def map_transcripts_segemehl(config: AssemblyConfig) -> None:
-    """Map assembled transcripts to the genome with segemehl (input to combinr).
-
-    Produces one coordinate-sorted BAM per assembly present in the work dir:
-    genome-guided Trinity, SL-depleted de novo Trinity, and (when enabled)
-    SL-depleted rnaSPAdes. Each query is mapped in split/spliced mode (``-S``),
-    reporting all alignments (``-H 0``) with brief CIGARs (``-e``). The genome
-    index is built once and reused across queries. Per-query resume: a BAM that
-    passes ``samtools quickcheck`` is left untouched.
-    """
-    wd = config.work_dir
-    sets = [
-        (wd / query, out_bam)
-        for query, out_bam in _TRANSCRIPT_SETS
-        if (wd / query).exists() and (wd / query).stat().st_size > 0
-    ]
-    if not sets:
-        log.warning("No assembled transcripts found to map; skipping.")
-        return
-
     index = wd / _TX_INDEX
     if not index.exists():
         run_cmd(["segemehl.x", "-x", str(index), "-d", str(config.genome)], cwd=wd)
-    try:
-        for query, out_bam in sets:
-            log.info("segemehl mapping transcripts %s -> %s ...", query.name, out_bam)
-            _map_one_transcript_set(config, index, query, out_bam)
-    finally:
-        # The genome index is regenerable; drop it so it doesn't linger in the
-        # run dir (a partial run rebuilds it cheaply next time).
-        index.unlink(missing_ok=True)
+    unsorted = wd / f"{out_bam}.unsorted.bam"
+    log.warning(
+        "Mapping %s with segemehl -S (-H 1) — memory-hungry; watch RSS on a "
+        "low-memory box.", query.name,
+    )
+    run_cmd(
+        [
+            "segemehl.x",
+            "-H", "1",
+            "-i", str(index),
+            "-d", str(config.genome),
+            "-q", str(query),
+            "-S", str(wd / _TX_SPLITS_BASE),
+            "-t", str(config.num_cpu),
+            "-b",
+            "-o", str(unsorted),
+        ],
+        cwd=wd,
+    )
+    index.unlink(missing_ok=True)
+    for suffix in _SPLITS_SUFFIXES:
+        (wd / f"{_TX_SPLITS_BASE}{suffix}").unlink(missing_ok=True)
+    stem = out_bam[: -len(_GENOME_BAM_SUFFIX)]
+    _write_unmapped_fasta(unsorted, wd / f"{stem}.unmapped_transcripts.fasta")
+    _coordinate_sort_and_filter(unsorted, out_bam, wd, config.num_cpu)
+    run_cmd(["samtools", "index", out_bam], cwd=wd)
+    unsorted.unlink(missing_ok=True)

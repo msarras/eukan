@@ -1,9 +1,10 @@
 """combinr transcript consolidation — the PASA replacement.
 
-Runs the external ``combinr`` tool over the segemehl transcript→genome BAMs
-(produced by :mod:`eukan.assembly.segemehl`) to build a non-redundant set of
-transcript models, then emits the same artifacts PASA produced so the
-annotation pipeline consumes them unchanged:
+Runs the external ``combinr assemble`` over the **SL-cut** transcript models
+(:mod:`eukan.assembly.sl_cut`) — the cut StringTie GTF and the cut de novo
+transcript→genome GFF3s — to build a non-redundant set of transcript models,
+then emits the same artifacts PASA produced so the annotation pipeline consumes
+them unchanged:
 
 * ``nr_transcripts.gff3`` — flat ``exon`` features grouped by ``Parent`` (the
   EVM ``--transcript_alignments`` contract), source ``combinr-assembly``;
@@ -11,23 +12,18 @@ annotation pipeline consumes them unchanged:
 * ``hints_rnaseq.gff`` — transcript exon hints concatenated with the intron and
   coverage hints already written by the aligner step.
 
-Jaccard-clip logic (gene-dense organisms): jaccard clipping is a Trinity-only
-feature, so when it is active we consolidate **only** the two Trinity BAMs and
-then add only the rnaSPAdes transcripts that overlap no Trinity model — adding
-the rest risks artificially fused models. Otherwise all available BAMs are
-consolidated together. Overlap is checked strand-agnostically because the RNA-seq
-is typically unstranded, so a de novo contig's mapped strand is arbitrary.
+All inputs are already in genome coordinates, jaccard-clipped, and SL-cut, so
+combinr simply consolidates them in one pass; ``combinr assemble`` auto-detects
+each input's format (GFF3/GTF/BAM) by extension.
 """
 
 from __future__ import annotations
 
-from collections import namedtuple
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from Bio.Seq import Seq
 
-from eukan.gff.intervals import IntervalIndex
 from eukan.infra.artifacts import Artifact
 from eukan.infra.genome import ContigIndex
 from eukan.infra.logging import get_logger
@@ -37,15 +33,14 @@ from eukan.settings import AssemblyConfig
 
 log = get_logger(__name__)
 
-# segemehl transcript→genome BAMs from the map_transcripts step.
-_TRINITY_BAMS = ("trinity-gg.genome.bam", "trinity-denovo.genome.bam")
-_RNASPADES_BAM = "rnaspades.genome.bam"
+# SL-cut transcript models from the sl_cut step (genome coordinates).
+_CUT_MODELS = (
+    "stringtie.sl_cut.gff3",
+    "rnaspades.genome.sl_cut.gff3",
+)
 # Source token written into nr_transcripts.gff3; EVM's weights.txt picks this up
-# as the TRANSCRIPT evidence source (eukan/annotation/evm.py::_first_source_token).
+# as the TRANSCRIPT evidence source (eukan/annotation/evidence.py::_first_source_token).
 _SOURCE = "combinr-assembly"
-
-# Lightweight interval for strand-agnostic overlap queries via IntervalIndex.
-_Span = namedtuple("_Span", "chrom strand start end")
 
 
 @dataclass
@@ -81,15 +76,17 @@ def _parse_attrs(col9: str) -> dict[str, str]:
     return attrs
 
 
-def _run_combinr_assemble(config: AssemblyConfig, bams: list[Path], out_gff: Path) -> None:
-    """Run ``combinr assemble`` over *bams*, writing its GFF3 stdout to *out_gff*."""
+def _run_combinr_assemble(config: AssemblyConfig, inputs: list[Path], out_gff: Path) -> None:
+    """Run ``combinr assemble`` over *inputs* (GFF3/GTF/BAM), GFF3 stdout to *out_gff*."""
     cmd = [_combinr_bin(config), "assemble"]
-    for bam in bams:
-        cmd += ["-i", str(bam)]
+    for path in inputs:
+        cmd += ["-i", str(path)]
     cmd += [
         "--format", "gff3",
         "-t", str(config.num_cpu),
         "--max-intron", str(config.max_intron_len),
+        # PASA --stringent_alignment_overlap: 0 = off (any-overlap, the default).
+        "--stringent-overlap", str(config.combinr_stringent_overlap),
     ]
     run_cmd(cmd, cwd=config.work_dir, out_file=out_gff.name)
 
@@ -124,17 +121,6 @@ def _parse_combinr_gff3(path: Path) -> list[_Transcript]:
     return result
 
 
-def _non_overlapping(candidates: list[_Transcript], reference: list[_Transcript]) -> list[_Transcript]:
-    """Candidates whose genomic span overlaps no reference span (strand-agnostic)."""
-    index: IntervalIndex[_Span] = IntervalIndex(
-        _Span(t.chrom, ".", t.start, t.end) for t in reference
-    )
-    return [
-        c for c in candidates
-        if not index.has_overlap(_Span(c.chrom, ".", c.start, c.end))
-    ]
-
-
 def _write_evm_transcripts_and_hints(
     transcripts: list[_Transcript], gff_out: Path, hints_out: Path
 ) -> None:
@@ -165,41 +151,23 @@ def _write_transcript_fasta(transcripts: list[_Transcript], genome: Path, out: P
 
 
 def run_combinr(config: AssemblyConfig) -> None:
-    """Consolidate the transcript→genome BAMs with combinr (replaces PASA)."""
+    """Consolidate the SL-cut transcript models with combinr (replaces PASA)."""
     wd = config.work_dir
-    trinity_bams = [wd / b for b in _TRINITY_BAMS if (wd / b).exists()]
-    rnaspades_bam = wd / _RNASPADES_BAM if (wd / _RNASPADES_BAM).exists() else None
-
-    if not trinity_bams and rnaspades_bam is None:
+    inputs = [
+        wd / f for f in _CUT_MODELS if (wd / f).exists() and (wd / f).stat().st_size > 0
+    ]
+    if not inputs:
         raise FileNotFoundError(
-            "No transcript→genome BAMs found for combinr; run the map_transcripts step first."
+            "No SL-cut transcript models found for combinr; run the sl_cut step first."
         )
 
-    if config.jaccard_clip and trinity_bams and rnaspades_bam is not None:
-        # Jaccard clipping is Trinity-only: consolidate Trinity, then graft in
-        # only the rnaSPAdes models that fall in loci Trinity did not cover.
-        trinity_gff = wd / "combinr_trinity.gff3"
-        rnaspades_gff = wd / "combinr_rnaspades.gff3"
-        _run_combinr_assemble(config, trinity_bams, trinity_gff)
-        _run_combinr_assemble(config, [rnaspades_bam], rnaspades_gff)
-        trinity_tx = _parse_combinr_gff3(trinity_gff)
-        rnaspades_tx = _parse_combinr_gff3(rnaspades_gff)
-        kept = _non_overlapping(rnaspades_tx, trinity_tx)
-        transcripts = trinity_tx + kept
-        log.info(
-            "combinr (jaccard): %d Trinity + %d non-overlapping rnaSPAdes "
-            "(of %d) = %d transcripts.",
-            len(trinity_tx), len(kept), len(rnaspades_tx), len(transcripts),
-        )
-    else:
-        bams = trinity_bams + ([rnaspades_bam] if rnaspades_bam else [])
-        all_gff = wd / "combinr_all.gff3"
-        _run_combinr_assemble(config, bams, all_gff)
-        transcripts = _parse_combinr_gff3(all_gff)
-        log.info(
-            "combinr consolidated %d transcripts from %d BAM(s).",
-            len(transcripts), len(bams),
-        )
+    all_gff = wd / "combinr_all.gff3"
+    _run_combinr_assemble(config, inputs, all_gff)
+    transcripts = _parse_combinr_gff3(all_gff)
+    log.info(
+        "combinr consolidated %d transcripts from %d input(s): %s.",
+        len(transcripts), len(inputs), ", ".join(p.name for p in inputs),
+    )
 
     if not transcripts:
         log.warning("combinr produced no transcript models — transcript evidence is empty.")

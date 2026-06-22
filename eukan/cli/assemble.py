@@ -31,10 +31,12 @@ from eukan.cli._framework import (
     help="Strand-specific library type.",
 )
 @optgroup.option(
-    "--aligner", type=click.Choice(["star", "segemehl"]),
-    default="star", show_default=True,
-    help="Read aligner. segemehl is splice-agnostic (captures non-canonical "
-    "splice sites STAR misses); STAR is the default.",
+    "--aligner", type=click.Choice(["auto", "star", "segemehl"]),
+    default="auto", show_default=True,
+    help="Read aligner. 'auto' (default) maps with STAR, then re-maps with "
+    "splice-agnostic segemehl when the diagnostic finds extensive non-canonical "
+    "splicing (so StringTie/hints aren't biased by STAR's canonical alignment). "
+    "'star' skips that escalation; 'segemehl' maps with segemehl from the start.",
 )
 @optgroup.option(
     "--align-mode", "-t", type=click.Choice(["EndToEnd", "Local"]),
@@ -61,27 +63,128 @@ from eukan.cli._framework import (
     help="NCBI genetic code for PASA. Supported: 1=standard, 6=Tetrahymena, 10=Euplotes, 12=Candida.",
 )
 @optgroup.option("--min-intron", "-m", type=int, default=20, show_default=True, help="Minimum intron length.")
-@optgroup.option("--max-intron", "-M", type=int, default=5000, show_default=True, help="Maximum intron length.")
+@optgroup.option(
+    "--max-intron", "-M", type=int, default=5000, show_default=True,
+    help="Maximum intron length, hard-imposed: transcript models are split at any "
+    "longer intron and StringTie reads a bounded BAM. Changing it on a resumed run "
+    "re-runs stringtie/sl_cut/combinr automatically; re-deriving hint files or "
+    "recovering longer introns also needs --run-star/--run-segemehl/--run-map-transcripts.",
+)
 @optgroup.option("--phred", type=click.Choice(["33", "64"]), default="33", show_default=True, help="Phred quality score.")
-@optgroup.option("--jaccard-clip", "-j", is_flag=True, help="Enable jaccard clipping.")
+@optgroup.option(
+    "--jaccard-clip", "-j", is_flag=True,
+    help="Enable jaccard clipping of fused transcripts (both rnaSPAdes contigs and "
+    "the StringTie GTF), splitting two adjacent loci joined into one model. "
+    "Needs paired reads; tune via the --jaccard-* knobs below.",
+)
+@optgroup.option(
+    "--jaccard-greediness", type=float, default=None,
+    help="Jaccard low-coverage sensitivity (default 1.5). Coverage-adaptive slack "
+    "that lets faint fusion troughs in low-depth regions be split: 0 = Trinity's "
+    "fixed floor (most stringent), higher = more aggressive in low coverage. "
+    "Only used with -j.",
+)
+@optgroup.option(
+    "--jaccard-max-trough", type=float, default=None,
+    help="Jaccard trough-depth gate (default 0.05): a junction's jaccard must dip to "
+    "<= this to be cut. LOWER for more stringent clipping (a deeper trough required). "
+    "Only used with -j.",
+)
+@optgroup.option(
+    "--jaccard-min-delta", type=float, default=None,
+    help="Jaccard flanking-hill rise (default 0.35): the jaccard must climb this far "
+    "above the trough on both sides for a cut. RAISE for more stringent clipping. "
+    "Only used with -j.",
+)
+@optgroup.option(
+    "--jaccard-max-adaptive-trough", type=float, default=None,
+    help="Ceiling on the coverage-adaptive trough gate (default 0.30): caps how far "
+    "--jaccard-greediness can relax --jaccard-max-trough in low coverage. LOWER to "
+    "keep low-coverage clipping stringent. Only used with -j.",
+)
 @optgroup.option(
     "--rnaspades/--no-rnaspades", default=True, show_default=True,
-    help="Run rnaSPAdes de novo assembly alongside Trinity (consolidated by combinr).",
+    help="Run rnaSPAdes de novo assembly (the de novo source; consolidated by combinr).",
+)
+@optgroup.option(
+    "--stringtie-min-junction", type=float, default=None,
+    help="StringTie -j: minimum spliced reads spanning a junction to keep it "
+    "(default 1). Raise it to drop single-read spurious junctions that inflate "
+    "isoforms / fuse neighbouring loci in noisy, dense, or trans-spliced genomes.",
+)
+@optgroup.option(
+    "--combinr-stringent-overlap", type=float, default=None,
+    help="combinr --stringent-overlap (PASA --stringent_alignment_overlap): two "
+    "transcripts cluster only when their span overlap is >= this percent of the "
+    "shorter transcript (default 0 = any overlap). Raise it (e.g. 30) to stop short "
+    "or tip-overlapping transcripts welding collinear neighbours into one model.",
+)
+@optgroup.option(
+    "--sl-sequence", default=None,
+    help="Override the spliced-leader sequence for trans-splice acceptor detection "
+    "(else recovered from the read soft-clip verdict or de novo insertions).",
+)
+@optgroup.option(
+    "--sl-cluster-window", type=int, default=5, show_default=True,
+    help="Genomic window (bp) for consolidating SL acceptor sites.",
+)
+@optgroup.option(
+    "--combinr-path", type=click.Path(exists=True, path_type=Path), default=None,
+    help="Path to the combinr binary (else resolved from PATH or "
+    "$EUKAN_ASSEMBLE_COMBINR_PATH).",
+)
+@optgroup.option(
+    "--uniprot", type=click.Path(exists=True, path_type=Path), default=None,
+    help="SwissProt FASTA (uniprot_sprot.faa) or prebuilt diamond .dmnd. Enables "
+    "homology-based splice-strand correction on unstranded libraries (skipped "
+    "when -S/--strand-specific is given), and homology de-fusion with --defuse. "
+    "Without it, both are no-ops.",
+)
+@optgroup.option(
+    "--defuse", is_flag=True, default=False,
+    help="Split chimeric (fused) transcripts using protein homology: an "
+    "ultra-sensitive diamond blastx vs SwissProt that finds >=2 distinct, "
+    "non-overlapping hits on one transcript cuts it at the inter-hit gap. "
+    "Requires --uniprot.",
+)
+@optgroup.option(
+    "--defuse-overlap-tolerance", type=float, default=None,
+    help="Max fractional query overlap (of the shorter hit) for two protein hits to "
+    "still count as distinct evidence of separate genes (default 0.10).",
 )
 @optgroup.option(
     "--memory-gb", type=int, default=None,
-    help="Trinity --max_memory cap in GiB. Defaults to 60 percent of "
+    help="rnaSPAdes -m memory cap in GiB. Defaults to 60 percent of "
          "currently-available memory (floored at 4 GiB).",
 )
 @optgroup.group("Re-run steps")
 @optgroup.option("--run-star", "-A", is_flag=True, help="Force re-run STAR read mapping.")
 @optgroup.option("--run-segemehl", is_flag=True, help="Force re-run segemehl read mapping.")
-@optgroup.option("--run-trinity", "-T", is_flag=True, help="Force re-run Trinity assembly.")
+@optgroup.option("--run-stringtie", is_flag=True, help="Force re-run StringTie genome-guided assembly.")
 @optgroup.option("--run-rnaspades", is_flag=True, help="Force re-run rnaSPAdes assembly.")
-@optgroup.option("--run-sl-deplete", is_flag=True, help="Force re-run SL depletion.")
+@optgroup.option(
+    "--run-jaccard", is_flag=True,
+    help="Force re-run jaccard clipping of fused transcripts.",
+)
 @optgroup.option(
     "--run-map-transcripts", is_flag=True,
-    help="Force re-run segemehl transcript→genome mapping.",
+    help="Force re-run STAR transcript→genome mapping.",
+)
+@optgroup.option(
+    "--run-strand-correct", is_flag=True,
+    help="Force re-run homology-based splice-strand correction.",
+)
+@optgroup.option(
+    "--run-defuse", is_flag=True,
+    help="Force re-run homology-based transcript de-fusion.",
+)
+@optgroup.option(
+    "--run-sl-detect", is_flag=True,
+    help="Force re-run SL trans-splice acceptor detection.",
+)
+@optgroup.option(
+    "--run-sl-cut", is_flag=True,
+    help="Force re-run the genomic SL cut of transcript models.",
 )
 @optgroup.option(
     "--run-combinr", is_flag=True,
@@ -102,13 +205,29 @@ def assemble(
     align_mode: str,
     run_star: bool,
     run_segemehl: bool,
-    run_trinity: bool,
+    run_stringtie: bool,
     run_rnaspades: bool,
-    run_sl_deplete: bool,
+    run_jaccard: bool,
     run_map_transcripts: bool,
+    run_strand_correct: bool,
+    run_defuse: bool,
+    run_sl_detect: bool,
+    run_sl_cut: bool,
     run_combinr: bool,
     jaccard_clip: bool,
+    jaccard_greediness: float | None,
+    jaccard_max_trough: float | None,
+    jaccard_min_delta: float | None,
+    jaccard_max_adaptive_trough: float | None,
     rnaspades: bool,
+    stringtie_min_junction: float | None,
+    combinr_stringent_overlap: float | None,
+    defuse: bool,
+    defuse_overlap_tolerance: float | None,
+    sl_sequence: str | None,
+    sl_cluster_window: int,
+    combinr_path: Path | None,
+    uniprot: Path | None,
     splice_permissive: bool,
     diagnose_softclips: bool,
     code: str,
@@ -145,6 +264,9 @@ def assemble(
     if memory_gb is not None and memory_gb < 1:
         raise click.UsageError("--memory-gb must be at least 1 GiB.")
 
+    if defuse and uniprot is None:
+        raise click.UsageError("--defuse needs a protein DB; supply --uniprot.")
+
     config = AssemblyConfig(**drop_none(
         genome=genome.resolve(),
         work_dir=step_work_dir("assemble"),
@@ -156,7 +278,19 @@ def assemble(
         aligner=aligner,
         align_mode=align_mode,
         jaccard_clip=jaccard_clip,
+        jaccard_greediness=jaccard_greediness,
+        jaccard_max_trough=jaccard_max_trough,
+        jaccard_min_delta=jaccard_min_delta,
+        jaccard_max_adaptive_trough=jaccard_max_adaptive_trough,
         rnaspades=rnaspades,
+        stringtie_min_junction_coverage=stringtie_min_junction,
+        combinr_stringent_overlap=combinr_stringent_overlap,
+        defuse=defuse,
+        defuse_overlap_tolerance=defuse_overlap_tolerance,
+        sl_sequence=sl_sequence,
+        sl_cluster_window=sl_cluster_window,
+        combinr_path=resolve_optional_path(combinr_path),
+        uniprot_db=resolve_optional_path(uniprot),
         splice_permissive=splice_permissive,
         diagnose_softclips=diagnose_softclips,
         genetic_code=code,
@@ -170,8 +304,11 @@ def assemble(
     force_steps = force_steps_from_run_flags(
         aligner=aligner,
         run_star=run_star, run_segemehl=run_segemehl,
-        run_trinity=run_trinity, run_rnaspades=run_rnaspades,
-        run_sl_deplete=run_sl_deplete, run_map_transcripts=run_map_transcripts,
+        run_stringtie=run_stringtie,
+        run_rnaspades=run_rnaspades, run_jaccard=run_jaccard,
+        run_map_transcripts=run_map_transcripts,
+        run_strand_correct=run_strand_correct, run_defuse=run_defuse,
+        run_sl_detect=run_sl_detect, run_sl_cut=run_sl_cut,
         run_combinr=run_combinr, force=force,
     )
     run_assembly(config, force_steps=force_steps or None)

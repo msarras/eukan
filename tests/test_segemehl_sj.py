@@ -155,23 +155,33 @@ def test_steps_for_selects_aligner():
     star = _steps_for("star")
     seg = _steps_for("segemehl")
     assert [s.name for s in star] == [
-        "star", "trinity", "rnaspades", "sl_deplete", "map_transcripts", "combinr"
+        "star", "stringtie", "rnaspades", "jaccard",
+        "map_transcripts", "strand_correct", "defuse", "sl_detect", "sl_cut", "combinr",
     ]
     assert [s.name for s in seg] == [
-        "segemehl", "trinity", "rnaspades", "sl_deplete", "map_transcripts", "combinr"
+        "segemehl", "stringtie", "rnaspades", "jaccard",
+        "map_transcripts", "strand_correct", "defuse", "sl_detect", "sl_cut", "combinr",
     ]
     assert seg[0].output == "segemehl_Aligned.sortedByCoord.out.bam"
 
 
 def test_force_steps_respects_active_aligner():
-    assert force_steps_from_run_flags(aligner="star", run_star=True) == ["assembly/star"]
-    assert force_steps_from_run_flags(
-        aligner="segemehl", run_segemehl=True
-    ) == ["assembly/segemehl"]
+    # --run-<aligner> cascades to the genome-guided consumers of the read BAM,
+    # but the active aligner's name is the one in the returned chain.
+    assert force_steps_from_run_flags(aligner="star", run_star=True) == [
+        "assembly/star", "assembly/stringtie", "assembly/strand_correct",
+        "assembly/defuse", "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
+    ]
+    assert force_steps_from_run_flags(aligner="segemehl", run_segemehl=True) == [
+        "assembly/segemehl", "assembly/stringtie", "assembly/strand_correct",
+        "assembly/defuse", "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
+    ]
     # --force re-runs the active aligner's whole chain.
     assert force_steps_from_run_flags(aligner="segemehl", force=True) == [
-        "assembly/segemehl", "assembly/trinity", "assembly/rnaspades",
-        "assembly/sl_deplete", "assembly/map_transcripts", "assembly/combinr",
+        "assembly/segemehl", "assembly/stringtie",
+        "assembly/rnaspades", "assembly/jaccard", "assembly/map_transcripts",
+        "assembly/strand_correct", "assembly/defuse", "assembly/sl_detect",
+        "assembly/sl_cut", "assembly/combinr",
     ]
 
 
@@ -187,6 +197,26 @@ def test_assembly_config_aligner_fields(tmp_path):
     ]
     star_cfg = cfg.model_copy(update={"aligner": "star"})
     assert star_cfg.aligner_bam == "STAR_Aligned.sortedByCoord.out.bam"
+
+
+def test_steps_for_auto_uses_escalating_read_step():
+    """`auto` keeps the `star` step name but uses the escalating read mapper."""
+    from eukan.assembly.star import map_reads_auto
+
+    steps = _steps_for("auto")
+    assert steps[0].name == "star"
+    assert steps[0].fn is map_reads_auto
+
+
+def test_aligner_bam_auto_resolves_to_segemehl_once_escalated(tmp_path):
+    """In auto mode, downstream reads STAR's BAM until a segemehl re-map appears."""
+    cfg = AssemblyConfig(
+        genome=tmp_path / "g.fa", work_dir=tmp_path, manifest_dir=tmp_path, num_cpu=1,
+    )
+    assert cfg.aligner == "auto"
+    assert cfg.aligner_bam == "STAR_Aligned.sortedByCoord.out.bam"
+    (tmp_path / "segemehl_Aligned.sortedByCoord.out.bam").write_text("escalated")
+    assert cfg.aligner_bam == "segemehl_Aligned.sortedByCoord.out.bam"
 
 
 def test_map_reads_segemehl_matches_h0_recipe(tmp_path, monkeypatch):

@@ -20,13 +20,32 @@ import csv
 import json
 from collections import defaultdict
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from eukan.infra.artifacts import Artifact
 from eukan.infra.logging import get_logger
 from eukan.infra.runner import run_cmd
 from eukan.infra.utils import concat_files
 
+if TYPE_CHECKING:
+    from eukan.assembly.polya import PolyAStats
+
 log = get_logger(__name__)
+
+# Read-BAM poly-A is characterized at the same MAPQ floor diagnose_bam uses, so a
+# backfill (poly-A-only) pass over the read BAM matches the full-walk numbers.
+_DIAGNOSTIC_MIN_MAPQ = 20
+
+
+def _log_read_polya(pa: PolyAStats, bam_name: str) -> None:
+    """INFO-log the read-BAM poly-A soft-clip tally (no-op when there are none)."""
+    if pa.n_polya or pa.n_polyt:
+        log.info(
+            "Poly-A soft-clips in %s: %d poly-A (3') + %d poly-T (5') of %d clips "
+            "(%.3f%% poly-A; mean %.1f bp, max %d bp).",
+            bam_name, pa.n_polya, pa.n_polyt, pa.n_clips_examined,
+            pa.polya_pct_of_clips, pa.polya_mean_len, pa.polya_len_max,
+        )
 
 # STAR motif codes → canonical/semi-canonical splice site dinucleotide pairs.
 _MOTIF_NAMES: dict[int, str] = {
@@ -182,12 +201,26 @@ def run_softclip_diagnostic(bam: Path, genome: Path, wd: Path) -> None:
         diagnose_bam,
         to_summary_dict,
     )
+    from eukan.assembly.polya import (
+        characterize_polya_bam,
+        has_section,
+        stats_to_dict,
+        write_polya_section,
+    )
 
     summary_path = wd / Artifact.SOFTCLIP_DIAGNOSTIC.value
     if not bam.exists():
         return
     if summary_path.exists():
         log.info("Soft-clip diagnostic already produced %s, skipping", summary_path.name)
+        # The poly-A "reads" section is a later addition and is written separately
+        # from the SL summary, so backfill it (cheap poly-A-only pass over the read
+        # BAM) when an existing or pre-feature summary would otherwise skip it — else
+        # the section is silently never produced on resume / force / upgrade-in-place.
+        if not has_section(wd, "reads"):
+            pa = characterize_polya_bam(bam, "reads", min_mapq=_DIAGNOSTIC_MIN_MAPQ)
+            write_polya_section(wd, "reads", stats_to_dict(pa))
+            _log_read_polya(pa, bam.name)
         return
 
     log.info("Running soft-clip / intron diagnostic over %s...", bam.name)
@@ -196,6 +229,11 @@ def run_softclip_diagnostic(bam: Path, genome: Path, wd: Path) -> None:
 
     with open(summary_path, "w") as f:
         json.dump(to_summary_dict(report, verdict), f, indent=2)
+
+    # Poly-A characterization of the read soft-clips (separate from the SL verdict),
+    # piggy-backing on the single diagnose_bam walk just performed.
+    write_polya_section(wd, "reads", stats_to_dict(report.polya))
+    _log_read_polya(report.polya, bam.name)
 
     ts = verdict.trans_splicing
     if ts.call in ("STRONG", "MODERATE"):

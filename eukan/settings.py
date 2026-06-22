@@ -162,18 +162,22 @@ class PipelineConfig(_StepRunSettings):
     weights: list[int] = Field(default_factory=lambda: [2, 1, 3])
     spaln_ssp: bool = False
     allow_noncanonical_splice: bool = False
-    consensus_engine: Literal["evm", "combinr"] = "evm"
-    """Consensus model builder: EVM (default) or the external combinr consensus
-    engine (folds in UTRs/isoforms, replacing the PASA UTR step)."""
     combinr_path: Path | None = None
     """Explicit path to the combinr binary; resolved from PATH when unset."""
+    combinr_stringent_overlap: float = 0.0
+    """combinr ``--stringent-overlap`` for the ``consensus --alt-splice`` isoform
+    grouping (PASA ``--stringent_alignment_overlap``): two transcript isoforms attach to
+    one gene only when their genomic spans overlap >= this percent of the shorter span.
+    0 = off (any overlap groups them). Raise it (PASA suggests 30) to stop short or
+    tip-overlapping transcripts from welding collinear neighbours into one multi-isoform
+    gene in dense / trans-spliced genomes. Does not affect the EVM consensus region
+    partitioner."""
 
     # --- Optional transcript evidence (auto-discovered from work_dir if not set) ---
     transcripts_fasta: Path | None = None
     transcripts_gff: Path | None = None
     rnaseq_hints: Path | None = None
     strand_specific: bool = False
-    utrs_db: Path | None = None
 
     # Well-known assembly output filenames — sourced from the cross-pipeline
     # artifact registry so renaming an artifact only edits one file.
@@ -271,15 +275,13 @@ class PipelineConfig(_StepRunSettings):
 # ---------------------------------------------------------------------------
 
 
-def _default_trinity_memory_gb(meminfo_path: str = "/proc/meminfo") -> int:
-    """Safe default for Trinity ``--max_memory``, in GiB.
+def _default_assembly_memory_gb(meminfo_path: str = "/proc/meminfo") -> int:
+    """Safe default for the de novo assembler's memory cap, in GiB.
 
-    Trinity (Jellyfish in genome-guided mode, Inchworm in de novo) reliably
-    overshoots its ``--max_memory`` soft cap during k-mer counting. We size
-    the cap from ``MemAvailable`` (the kernel's estimate of memory free for
-    new processes) rather than ``MemTotal``, so the cap reflects what the
-    machine can actually spare. Falls back to half of ``MemTotal``, then to
-    4 GiB. Always at least 4 GiB — Trinity needs that much to run at all.
+    rnaSPAdes sizes its ``-m`` budget from this. We derive it from
+    ``MemAvailable`` (the kernel's estimate of memory free for new processes)
+    rather than ``MemTotal``, so the cap reflects what the machine can actually
+    spare. Falls back to half of ``MemTotal``, then to a 4 GiB floor.
     """
     try:
         avail_kb = total_kb = 0
@@ -314,22 +316,96 @@ class AssemblyConfig(_StepRunSettings):
     max_intron_len: int = 5000
     phred_quality: int = 33
     strand_specific: str | None = None
-    aligner: Literal["star", "segemehl"] = "star"
+    aligner: Literal["auto", "star", "segemehl"] = "auto"
     align_mode: str = "Local"
     jaccard_clip: bool = False
+    jaccard_greediness: float = 1.5
+    """Coverage-adaptive slack for jaccard fusion-trough detection. At low read-pair
+    depth the pseudocount keeps a real fusion junction's jaccard above the fixed
+    trough floor, so the contig is never split; this widens the trough gate toward
+    the deepest jaccard physically reachable at the local depth (times this factor),
+    making low-coverage fusions splittable while leaving high-coverage behaviour
+    unchanged. 0 disables the adaptation (Trinity-faithful fixed floor)."""
+    jaccard_max_trough: float = 0.05
+    """Jaccard trough-depth gate (Trinity's 0.05): a candidate fusion junction's
+    per-position jaccard must dip to <= this for the contig to be cut there. LOWER
+    it for more stringent clipping (a deeper, cleaner bridging trough required, fewer
+    splits); raise it to clip on shallower dips. At low read-pair depth this floor is
+    adapted upward by ``jaccard_greediness`` (bounded by ``jaccard_max_adaptive_trough``)."""
+    jaccard_min_delta: float = 0.35
+    """Jaccard flanking-hill requirement (Trinity's 0.35): the jaccard must rise at
+    least this far above the trough on BOTH sides within the scan window for the dip
+    to be called a fusion junction. RAISE it for more stringent clipping (a sharper
+    hill-trough-hill shape demanded); lower it to accept fainter junctions."""
+    jaccard_max_adaptive_trough: float = 0.30
+    """Ceiling on the coverage-adaptive trough gate: ``jaccard_greediness`` only relaxes
+    ``jaccard_max_trough`` up to this value, so even at very low read-pair depth a dip
+    shallower than this is never treated as a fusion. LOWER it to keep low-coverage
+    clipping stringent; raise it to allow splitting on fainter low-coverage troughs."""
     splice_permissive: bool = False
     diagnose_softclips: bool = True
 
+    # --- Genome-guided assembly (StringTie) stringency ---
+    stringtie_min_coverage: float = 1.5
+    """StringTie ``-c``: minimum per-bp read coverage for a transcript to be
+    assembled. Raised above StringTie's default of 1 to suppress low-coverage
+    spurious models."""
+    stringtie_min_isoform_fraction: float = 0.1
+    """StringTie ``-f``: minimum isoform abundance as a fraction of a locus's
+    dominant isoform. Raised above StringTie's default of 0.01 to drop minor
+    noise isoforms that inflate the genome-guided set."""
+    stringtie_min_junction_coverage: float = 1.0
+    """StringTie ``-j``: minimum number of spliced reads spanning a junction for it
+    to be kept. Left at StringTie's default of 1, but exposed so it can be raised:
+    a single spurious junction read (e.g. from noisy mapping in dense or
+    trans-spliced genomes) otherwise becomes a splice-graph edge and inflates
+    isoforms / fuses neighbouring loci."""
+
     # --- de novo + combinr consolidation routine (replaces PASA) ---
     rnaspades: bool = True
-    """Run rnaspades de novo assembly alongside Trinity and consolidate via combinr."""
+    """Run rnaSPAdes de novo assembly (the de novo source; consolidated via combinr)."""
     min_sl_fragment: int = 25
     """Minimum length (nt) of a fragment kept after in-silico SL trans-splicing."""
     sl_sequence: str | None = None
-    """Override the spliced-leader sequence used for depletion (else taken from the
-    soft-clip diagnostic verdict)."""
+    """Override the spliced-leader sequence used for SL detection (else taken from
+    the read soft-clip verdict, or the dominant de novo insertion motif)."""
     combinr_path: Path | None = None
     """Explicit path to the combinr binary; resolved from PATH when unset."""
+    combinr_stringent_overlap: float = 0.0
+    """combinr ``--stringent-overlap`` for ``combinr assemble`` clustering (PASA
+    ``--stringent_alignment_overlap``): two transcripts cluster only when their
+    genomic spans overlap >= this percent of the shorter span. 0 = off (any overlap
+    clusters). Raise it (PASA suggests 30) to stop short or tip-overlapping transcripts
+    pulling collinear neighbours into one cluster in dense / trans-spliced genomes."""
+    sl_cluster_window: int = 5
+    """Genomic window (bp) for consolidating SL acceptor sites per (chrom, strand)."""
+    min_sl_clip_len: int = 8
+    """Minimum soft-clip length (bp) considered as a spliced-leader acceptor signal."""
+    min_sl_insertion_len: int = 10
+    """Minimum internal-insertion length (bp) considered as a spliced-leader signal."""
+
+    # --- Homology-based splice-strand correction (unstranded libraries) ---
+    uniprot_db: Path | None = None
+    """SwissProt FASTA (``uniprot_sprot.faa``) or prebuilt ``.dmnd`` enabling
+    forward-frame ``diamond blastx`` strand correction. Unset (or with ``-S``)
+    disables the strand_correct step."""
+    min_strand_consensus: int = 50
+    """Minimum confirmed introns required to trust the learned splice consensus;
+    below this the correction falls back to canonical GT-AG."""
+    strand_blastx_evalue: float = 1e-5
+    """diamond blastx e-value cutoff for a transcript to count as homology-confirmed."""
+
+    # --- Homology-grounded de-fusion (chimeric transcript splitting) ---
+    defuse: bool = False
+    """Split fused transcripts using protein homology: an ``--ultra-sensitive``
+    ``diamond blastx`` vs SwissProt that finds >=2 distinct, non-overlapping protein
+    hits on one transcript flags a chimera of two genes and cuts it at the inter-hit
+    gap. Requires ``--uniprot`` (shares its DB); off by default."""
+    defuse_overlap_tolerance: float = 0.10
+    """Max fractional query overlap (of the shorter hit) for two protein hits to still
+    count as *distinct, non-overlapping* evidence of separate genes (default 0.10)."""
+    defuse_blastx_evalue: float = 1e-5
+    """diamond blastx e-value cutoff for a protein hit to count toward de-fusion."""
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -339,9 +415,19 @@ class AssemblyConfig(_StepRunSettings):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def aligner_bam(self) -> str:
-        """Coordinate-sorted BAM filename produced by the active aligner."""
-        if self.aligner == "segemehl":
-            return "segemehl_Aligned.sortedByCoord.out.bam"
+        """The read BAM downstream genome-guided steps (StringTie, SL read-side) use.
+
+        segemehl's BAM when it was selected explicitly, or when ``auto`` escalated
+        to a segemehl re-map after detecting extensive non-canonical splicing (its
+        BAM is then on disk); otherwise STAR's. The escalation makes segemehl's
+        splice-agnostic mapping — not STAR's canonical-biased one — the basis for
+        genome-guided assembly.
+        """
+        seg = "segemehl_Aligned.sortedByCoord.out.bam"
+        if self.aligner == "segemehl" or (
+            self.aligner == "auto" and (self.work_dir / seg).exists()
+        ):
+            return seg
         return "STAR_Aligned.sortedByCoord.out.bam"
 
     @computed_field  # type: ignore[prop-decorator]
@@ -362,18 +448,9 @@ class AssemblyConfig(_StepRunSettings):
             return ["-q", str(self.single_reads)]
         raise ValueError("No read files provided")
 
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def reads_args_trinity(self) -> list[str]:
-        if self.left_reads and self.right_reads:
-            return ["--left", str(self.left_reads), "--right", str(self.right_reads)]
-        elif self.single_reads:
-            return ["--single", str(self.single_reads)]
-        raise ValueError("No read files provided")
-
     memory_gb: int = Field(
-        default_factory=lambda: _default_trinity_memory_gb(),
-        description="Trinity --max_memory cap in GiB.",
+        default_factory=lambda: _default_assembly_memory_gb(),
+        description="rnaSPAdes -m memory cap in GiB.",
     )
 
     settings_customise_sources = _pyproject_settings_sources("assemble")
