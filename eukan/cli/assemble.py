@@ -88,6 +88,13 @@ from eukan.cli._framework import (
     "isoforms / fuse neighbouring loci in noisy, dense, or trans-spliced genomes.",
 )
 @optgroup.option(
+    "--combinr-stringent-overlap", type=float, default=None,
+    help="combinr --stringent-overlap (PASA --stringent_alignment_overlap): two "
+    "transcripts cluster only when their span overlap is >= this percent of the "
+    "shorter transcript (default 0 = any overlap). Raise it (e.g. 30) to stop short "
+    "or tip-overlapping transcripts welding collinear neighbours into one model.",
+)
+@optgroup.option(
     "--sl-sequence", default=None,
     help="Override the spliced-leader sequence for trans-splice acceptor detection "
     "(else recovered from the read soft-clip verdict or de novo insertions).",
@@ -167,6 +174,7 @@ def assemble(
     jaccard_clip: bool,
     rnaspades: bool,
     stringtie_min_junction: float | None,
+    combinr_stringent_overlap: float | None,
     sl_sequence: str | None,
     sl_cluster_window: int,
     combinr_path: Path | None,
@@ -220,6 +228,7 @@ def assemble(
         jaccard_clip=jaccard_clip,
         rnaspades=rnaspades,
         stringtie_min_junction_coverage=stringtie_min_junction,
+        combinr_stringent_overlap=combinr_stringent_overlap,
         sl_sequence=sl_sequence,
         sl_cluster_window=sl_cluster_window,
         combinr_path=resolve_optional_path(combinr_path),

@@ -94,6 +94,15 @@ def _max_intron_scalar(config: AssemblyConfig) -> list[str]:
     return [f"max_intron_len={config.max_intron_len}"]
 
 
+def _combinr_scalars(config: AssemblyConfig) -> list[str]:
+    # combinr passes --max-intron and --stringent-overlap; changing either re-runs the
+    # consolidation (the cut models are byte-identical, so only a scalar invalidates it).
+    return [
+        f"max_intron_len={config.max_intron_len}",
+        f"combinr_stringent_overlap={config.combinr_stringent_overlap}",
+    ]
+
+
 def _stringtie_scalars(config: AssemblyConfig) -> list[str]:
     # StringTie reads a max-intron-bounded BAM and runs at a configurable -c/-f/-j
     # stringency; changing any of these re-assembles the genome-guided set.
@@ -177,7 +186,7 @@ def _steps_for(aligner: str) -> list[StepSpec]:
         StepSpec(
             "combinr", run_combinr,
             Artifact.NR_TRANSCRIPTS_FASTA.value, "--run-combinr",
-            inputs=_combinr_inputs, scalars=_max_intron_scalar,
+            inputs=_combinr_inputs, scalars=_combinr_scalars,
         ),
     ]
 

@@ -45,6 +45,13 @@ from eukan.cli._framework import (
     show_default=True,
     help="Weights for evidence sources: protein, gene predictions, transcripts.",
 )
+@optgroup.option(
+    "--combinr-stringent-overlap", type=float, default=None,
+    help="combinr --stringent-overlap for the consensus --alt-splice isoform grouping "
+    "(PASA --stringent_alignment_overlap): two transcript isoforms attach to one gene "
+    "only when their span overlap is >= this percent of the shorter (default 0 = any "
+    "overlap). Raise it (e.g. 30) to keep tip-overlapping collinear neighbours separate.",
+)
 @code_option(default=11)
 @optgroup.group("Override options")
 @optgroup.option(
@@ -95,6 +102,7 @@ def annotate(
     weights: tuple[int, ...],
     code: int,
     combinr_path: Path | None,
+    combinr_stringent_overlap: float | None,
     kingdom: str | None,
     run_genemark: bool,
     run_prot_align: bool,
@@ -126,6 +134,7 @@ def annotate(
         genetic_code=str(code),
         weights=list(weights),
         combinr_path=resolve_optional_path(combinr_path),
+        combinr_stringent_overlap=combinr_stringent_overlap,
         strand_specific=strand_specific,
         allow_noncanonical_splice=splice_permissive,
         spaln_ssp=spsp,

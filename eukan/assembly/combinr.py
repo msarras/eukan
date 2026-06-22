@@ -85,6 +85,8 @@ def _run_combinr_assemble(config: AssemblyConfig, inputs: list[Path], out_gff: P
         "--format", "gff3",
         "-t", str(config.num_cpu),
         "--max-intron", str(config.max_intron_len),
+        # PASA --stringent_alignment_overlap: 0 = off (any-overlap, the default).
+        "--stringent-overlap", str(config.combinr_stringent_overlap),
     ]
     run_cmd(cmd, cwd=config.work_dir, out_file=out_gff.name)
 

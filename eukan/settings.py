@@ -164,6 +164,14 @@ class PipelineConfig(_StepRunSettings):
     allow_noncanonical_splice: bool = False
     combinr_path: Path | None = None
     """Explicit path to the combinr binary; resolved from PATH when unset."""
+    combinr_stringent_overlap: float = 0.0
+    """combinr ``--stringent-overlap`` for the ``consensus --alt-splice`` isoform
+    grouping (PASA ``--stringent_alignment_overlap``): two transcript isoforms attach to
+    one gene only when their genomic spans overlap >= this percent of the shorter span.
+    0 = off (any overlap groups them). Raise it (PASA suggests 30) to stop short or
+    tip-overlapping transcripts from welding collinear neighbours into one multi-isoform
+    gene in dense / trans-spliced genomes. Does not affect the EVM consensus region
+    partitioner."""
 
     # --- Optional transcript evidence (auto-discovered from work_dir if not set) ---
     transcripts_fasta: Path | None = None
@@ -347,6 +355,12 @@ class AssemblyConfig(_StepRunSettings):
     the read soft-clip verdict, or the dominant de novo insertion motif)."""
     combinr_path: Path | None = None
     """Explicit path to the combinr binary; resolved from PATH when unset."""
+    combinr_stringent_overlap: float = 0.0
+    """combinr ``--stringent-overlap`` for ``combinr assemble`` clustering (PASA
+    ``--stringent_alignment_overlap``): two transcripts cluster only when their
+    genomic spans overlap >= this percent of the shorter span. 0 = off (any overlap
+    clusters). Raise it (PASA suggests 30) to stop short or tip-overlapping transcripts
+    pulling collinear neighbours into one cluster in dense / trans-spliced genomes."""
     sl_cluster_window: int = 5
     """Genomic window (bp) for consolidating SL acceptor sites per (chrom, strand)."""
     min_sl_clip_len: int = 8

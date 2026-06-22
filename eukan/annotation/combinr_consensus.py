@@ -175,6 +175,8 @@ def run_combinr_consensus(
         cmd += [
             "--transcript-alignments", "transcripts.match.gff3",
             "--alt-splice", "--events", "combinr.alt_splice_events.tsv",
+            # PASA --stringent_alignment_overlap for the isoform grouping; 0 = off.
+            "--stringent-overlap", str(config.combinr_stringent_overlap),
         ]
 
     run_cmd(cmd, cwd=sdir, out_file="consensus_models.gff3")

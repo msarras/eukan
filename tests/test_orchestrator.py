@@ -400,8 +400,10 @@ class TestAssemblyStepScalars:
         # a changed greediness re-clips via the always-re-run + map_transcripts.
         assert self._scalars(tmp_path, "jaccard") is None
 
-    def test_combinr_tracks_max_intron(self, tmp_path):
-        assert self._scalars(tmp_path, "combinr") == ["max_intron_len=5000"]
+    def test_combinr_tracks_max_intron_and_stringent_overlap(self, tmp_path):
+        scalars = self._scalars(tmp_path, "combinr")
+        assert "max_intron_len=5000" in scalars
+        assert any(s.startswith("combinr_stringent_overlap=") for s in scalars)
 
     def test_sl_cut_tracks_max_intron_and_min_fragment(self, tmp_path):
         scalars = self._scalars(tmp_path, "sl_cut")

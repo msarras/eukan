@@ -368,6 +368,19 @@ def _phase_snap_codingquarry(
     return ev
 
 
+def _consensus_scalars(config: PipelineConfig) -> list[str]:
+    """Config values that change combinr consensus output, folded into the consensus
+    step's resume fingerprint so a change re-runs it on resume (in addition to the
+    explicit ``--run-consensus``). ``combinr_stringent_overlap`` tunes the
+    ``--alt-splice`` isoform grouping; weights and the genetic code feed the consensus
+    engine directly."""
+    return [
+        f"weights={config.weights}",
+        f"genetic_code={config.genetic_code}",
+        f"combinr_stringent_overlap={config.combinr_stringent_overlap}",
+    ]
+
+
 def _phase_evm(
     config: PipelineConfig, manifest: RunManifest, ev: dict[str, Path],
 ) -> Path:
@@ -390,4 +403,5 @@ def _phase_evm(
     return _run_step(
         config, manifest, "evm_consensus_models", build_consensus_models,
         *consensus_args, transcripts=transcripts,
+        input_scalars=_consensus_scalars(config),
     )

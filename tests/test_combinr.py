@@ -107,7 +107,17 @@ def test_run_combinr_assemble_command(tmp_path, monkeypatch):
     assert cmd.count("-i") == 2
     assert cmd[cmd.index("--format") + 1] == "gff3"
     assert cmd[cmd.index("--max-intron") + 1] == "5000"
+    # stringent-overlap defaults to 0.0 (off) unless configured.
+    assert cmd[cmd.index("--stringent-overlap") + 1] == "0.0"
     assert kw["out_file"] == "out.gff3"
+
+
+def test_run_combinr_assemble_passes_stringent_overlap(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(combinr, "run_cmd", lambda cmd, **kw: calls.append(cmd))
+    cfg = _config(tmp_path, combinr_stringent_overlap=30.0)
+    combinr._run_combinr_assemble(cfg, [tmp_path / "a.bam"], tmp_path / "o.gff3")
+    assert calls[0][calls[0].index("--stringent-overlap") + 1] == "30.0"
 
 
 def test_combinr_path_override(tmp_path, monkeypatch):
