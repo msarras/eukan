@@ -61,6 +61,33 @@ def _bam_is_complete(path: Path) -> bool:
     return True
 
 
+def _write_unmapped_fasta(unsorted_bam: Path, out_fasta: Path) -> int:
+    """Extract unmapped records from *unsorted_bam* to *out_fasta* (FASTA).
+
+    The segemehl transcript BAM keeps unmapped queries before the ``-F 4`` filter
+    drops them; pulling them out here (pysam, no samtools dependency) preserves the
+    transcripts that failed to map for inspection, matching what the STARlong path
+    saves via ``--outReadsUnmapped``. Returns the number written.
+    """
+    import pysam
+
+    n = 0
+    bam = pysam.AlignmentFile(str(unsorted_bam), "rb")
+    try:
+        with open(out_fasta, "w") as fh:
+            for read in bam:
+                if not read.is_unmapped or read.is_secondary or read.is_supplementary:
+                    continue
+                seq = read.query_sequence
+                if not read.query_name or not seq:
+                    continue
+                fh.write(f">{read.query_name}\n{seq}\n")
+                n += 1
+    finally:
+        bam.close()
+    return n
+
+
 def _coordinate_sort_and_filter(
     unsorted: Path, out_bam: str, wd: Path, num_cpu: int
 ) -> None:
@@ -221,8 +248,8 @@ def map_one_transcript_set_segemehl(config: AssemblyConfig, query: Path, out_bam
     segemehl ``-S`` natively splits long transcripts at introns, recovering the
     splice structure STAR can miss on long queries. ``-H 1`` (report only the best
     alignment) bounds the split-DP memory that ``-H 0`` blew past on this box; we
-    then drop unmapped reads and coordinate-sort/index like the read path. Unmapped
-    transcripts are not captured here — the STARlong primary path does that.
+    extract the unmapped transcripts (for inspection — mirrors the STARlong primary
+    path), then drop unmapped reads and coordinate-sort/index like the read path.
     """
     wd = config.work_dir
     final = wd / out_bam
@@ -255,6 +282,8 @@ def map_one_transcript_set_segemehl(config: AssemblyConfig, query: Path, out_bam
     index.unlink(missing_ok=True)
     for suffix in _SPLITS_SUFFIXES:
         (wd / f"{_TX_SPLITS_BASE}{suffix}").unlink(missing_ok=True)
+    stem = out_bam[: -len(_GENOME_BAM_SUFFIX)]
+    _write_unmapped_fasta(unsorted, wd / f"{stem}.unmapped_transcripts.fasta")
     _coordinate_sort_and_filter(unsorted, out_bam, wd, config.num_cpu)
     run_cmd(["samtools", "index", out_bam], cwd=wd)
     unsorted.unlink(missing_ok=True)

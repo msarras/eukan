@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from eukan.assembly.polya import PolyAStats, tally_clip
+
 if TYPE_CHECKING:
     import pysam
 
@@ -282,11 +284,14 @@ class LocusConsistencyStats:
 
 @dataclass
 class DiagnosticReport:
-    """All three views of one BAM walk."""
+    """All views of one BAM walk."""
 
     softclip: SoftClipStats
     intron: IntronStats
     locus_consistency: LocusConsistencyStats
+    # Poly-A / poly-T soft-clip tallies, accumulated in the same pass but kept
+    # separate from the SL/trans-splice verdict (see eukan.assembly.polya).
+    polya: PolyAStats = field(default_factory=PolyAStats)
 
 
 @dataclass
@@ -551,6 +556,8 @@ def diagnose_bam(
     dinuc: Counter[str] = Counter()
     n_introns = 0
 
+    polya = PolyAStats()
+
     with ContigIndex(genome_path) as contigs:
         bam = pysam.AlignmentFile(str(bam_path), "rb")
         try:
@@ -563,6 +570,7 @@ def diagnose_bam(
                 for side, seq, anchor_pos in _extract_clips(read, min_clip_len):
                     had_clip = True
                     clips_by_side[side] += 1
+                    tally_clip(polya, side, seq, chrom_name)
                     locus = (chrom_name, anchor_pos, side)
                     key = _cluster_key(side, seq, cluster_key_len)
                     cluster_loci.setdefault(key, set()).add(locus)
@@ -690,7 +698,7 @@ def diagnose_bam(
     )
 
     return DiagnosticReport(
-        softclip=soft, intron=intron, locus_consistency=locus_consistency,
+        softclip=soft, intron=intron, locus_consistency=locus_consistency, polya=polya,
     )
 
 

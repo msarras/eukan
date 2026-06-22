@@ -39,6 +39,9 @@ class Artifact(StrEnum):
     # --- assembly diagnostic emitted by the soft-clip / intron walk ---
     SOFTCLIP_DIAGNOSTIC = "softclip_diagnostic_summary.json"
 
+    # --- assembly poly-A / poly-T soft-clip + transcript characterization ---
+    POLYA_DIAGNOSTIC = "polyA_diagnostic.json"
+
     # --- SL trans-splice acceptor sites (persist-only; not auto-discovered) ---
     SL_ACCEPTORS = "sl_acceptors.gff3"
 
@@ -57,6 +60,7 @@ _PRODUCER: dict[Artifact, str] = {
     Artifact.RNASEQ_HINTS:         "assemble",
     Artifact.SPLICE_SUMMARY:       "assemble",
     Artifact.SOFTCLIP_DIAGNOSTIC:  "assemble",
+    Artifact.POLYA_DIAGNOSTIC:     "assemble",
     Artifact.SL_ACCEPTORS:         "assemble",
     Artifact.REPEATMASK_HINTS:     "mask-repeats",
     Artifact.FINAL_GFF3:           "annotate",

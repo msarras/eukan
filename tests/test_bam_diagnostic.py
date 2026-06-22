@@ -330,6 +330,32 @@ def test_diagnose_bam_trans_splicing_signature(
     assert intron.n_introns_total == 0
 
 
+def test_diagnose_bam_tallies_polya_without_perturbing_sl_verdict(tmp_path, synthetic_genome):
+    # Reads whose only soft-clip is a poly-A 3' tail: counted in report.polya, but
+    # poly-A is low-complexity so it must NOT register as a trans-splicing (SL) call.
+    contigs = [("chr1", 1000)]
+    reads = [
+        dict(
+            query_name=f"r{i}",
+            query_sequence="ACGTACGTAC" + "A" * 20,  # 10 M aligned + 20S poly-A tail
+            flag=0,
+            reference_id=0,
+            reference_start=100 + i * 50,
+            mapping_quality=60,
+            cigartuples=[(0, 10), (4, 20)],
+        )
+        for i in range(5)
+    ]
+    bam = _write_bam(tmp_path / "polya.bam", contigs, reads)
+    report = diagnose_bam(bam, synthetic_genome, min_clip_len=8, min_mapq=20)
+
+    assert report.polya.n_polya == 5
+    assert report.polya.n_polyt == 0
+    assert report.polya.n_clips_examined == 5
+    verdict = compute_verdict(report)
+    assert verdict.trans_splicing.call == "ABSENT"  # poly-A is not an SL signal
+
+
 def test_diagnose_bam_filters_low_mapq_and_secondary(tmp_path, synthetic_genome):
     contigs = [("chr1", 1000)]
     clip = "AAAACCCCAAAAGGGGGGGG"

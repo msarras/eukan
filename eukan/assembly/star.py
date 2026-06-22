@@ -195,6 +195,69 @@ def map_transcripts(config: AssemblyConfig) -> None:
         _map_transcripts_segemehl(config)
     else:
         map_transcripts_star(config)
+    _finalize_transcript_diagnostics(config)
+
+
+def _finalize_transcript_diagnostics(config: AssemblyConfig) -> None:
+    """Log unmapped-transcript counts and (when diagnosing) characterize poly-A.
+
+    Path-agnostic: runs after either mapper over the files already on disk, so it
+    is safe on a resumed/reused run. The unmapped FASTA is reported unconditionally
+    (completeness); the poly-A characterization of the de novo transcript→genome BAM
+    and the unmapped set is gated by ``diagnose_softclips`` (it is a soft-clip
+    diagnostic) and written to ``polyA_diagnostic.json``, separate from the SL verdict.
+    """
+    from eukan.assembly.jaccard import _genome_stats
+    from eukan.assembly.polya import (
+        characterize_polya_bam,
+        scan_fasta_polya,
+        stats_to_dict,
+        write_polya_section,
+    )
+    from eukan.assembly.segemehl import _GENOME_BAM_SUFFIX, _TRANSCRIPT_SETS, _resolve_query
+
+    wd = config.work_dir
+    for query_name, out_bam in _TRANSCRIPT_SETS:
+        genome_bam = wd / out_bam
+        if not genome_bam.exists():
+            continue
+        stem = out_bam[: -len(_GENOME_BAM_SUFFIX)]
+        unmapped = wd / f"{stem}.unmapped_transcripts.fasta"
+
+        # The unmapped FASTA is written only when the mapping actually runs; on a
+        # resumed run with a complete BAM (or a run dir predating this feature) it
+        # may be absent. Distinguish that from a genuine zero so the log/JSON never
+        # claims "everything mapped" when the count is simply unavailable.
+        if unmapped.exists():
+            n_unmapped, n_unmapped_polya = scan_fasta_polya(unmapped)
+            query = _resolve_query(wd, query_name)
+            n_input = _genome_stats(query)[1] if query.exists() else 0
+            pct = 100.0 * n_unmapped / n_input if n_input else 0.0
+            log.info(
+                "Unmapped de novo transcripts (%s): %d of %d (%.2f%%)%s",
+                stem, n_unmapped, n_input, pct,
+                f" -> {unmapped.name}" if n_unmapped else "",
+            )
+        else:
+            log.info(
+                "Unmapped de novo transcript FASTA not present for %s (reused BAM or "
+                "older run dir); unmapped count unavailable this run.", stem,
+            )
+
+        if not config.diagnose_softclips:
+            continue
+        tx_stats = characterize_polya_bam(genome_bam, "transcripts")
+        write_polya_section(wd, "transcripts", stats_to_dict(tx_stats))
+        if unmapped.exists():
+            write_polya_section(
+                wd, "unmapped_transcripts",
+                {"n_seqs": n_unmapped, "n_with_polyA_tail": n_unmapped_polya},
+            )
+        log.info(
+            "Poly-A in de novo transcript mapping (%s): %d poly-A 3' soft-clips of %d "
+            "(%.3f%%).",
+            stem, tx_stats.n_polya, tx_stats.n_clips_examined, tx_stats.polya_pct_of_clips,
+        )
 
 
 def _map_transcripts_segemehl(config: AssemblyConfig) -> None:
