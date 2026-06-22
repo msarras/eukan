@@ -112,7 +112,7 @@ class TestAssemblyForceStepsFromRunFlags:
     _ALL_KEYS: ClassVar[list[str]] = [
         "assembly/star", "assembly/stringtie",
         "assembly/rnaspades", "assembly/jaccard", "assembly/map_transcripts",
-        "assembly/strand_correct",
+        "assembly/strand_correct", "assembly/defuse",
         "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
     ]
 
@@ -129,7 +129,7 @@ class TestAssemblyForceStepsFromRunFlags:
         (the de novo assembly side — rnaspades/jaccard/map_transcripts — is independent)."""
         assert assembly_force_steps_from_run_flags(run_star=True) == [
             "assembly/star", "assembly/stringtie", "assembly/strand_correct",
-            "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
+            "assembly/defuse", "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
         ]
 
     def test_run_combinr_alone_forces_combinr_only(self):
@@ -139,14 +139,14 @@ class TestAssemblyForceStepsFromRunFlags:
         """Re-assembling de novo invalidates the whole downstream transcript chain."""
         assert assembly_force_steps_from_run_flags(run_rnaspades=True) == [
             "assembly/rnaspades", "assembly/jaccard", "assembly/map_transcripts",
-            "assembly/strand_correct", "assembly/sl_detect", "assembly/sl_cut",
-            "assembly/combinr",
+            "assembly/strand_correct", "assembly/defuse", "assembly/sl_detect",
+            "assembly/sl_cut", "assembly/combinr",
         ]
 
     def test_run_stringtie_cascades_downstream(self):
         """StringTie's GTF feeds strand_correct + the SL cut, which feeds combinr."""
         assert assembly_force_steps_from_run_flags(run_stringtie=True) == [
-            "assembly/stringtie", "assembly/strand_correct",
+            "assembly/stringtie", "assembly/strand_correct", "assembly/defuse",
             "assembly/sl_cut", "assembly/combinr",
         ]
 
@@ -160,13 +160,19 @@ class TestAssemblyForceStepsFromRunFlags:
 
     def test_run_strand_correct_cascades_downstream(self):
         assert assembly_force_steps_from_run_flags(run_strand_correct=True) == [
-            "assembly/strand_correct", "assembly/sl_cut", "assembly/combinr"
+            "assembly/strand_correct", "assembly/defuse", "assembly/sl_cut",
+            "assembly/combinr",
+        ]
+
+    def test_run_defuse_cascades_to_sl_cut_and_combinr(self):
+        assert assembly_force_steps_from_run_flags(run_defuse=True) == [
+            "assembly/defuse", "assembly/sl_cut", "assembly/combinr"
         ]
 
     def test_run_map_transcripts_cascades_to_sl_and_combinr(self):
         """The new spliced BAM invalidates every step that reads it, directly or not."""
         assert assembly_force_steps_from_run_flags(run_map_transcripts=True) == [
-            "assembly/map_transcripts", "assembly/strand_correct",
+            "assembly/map_transcripts", "assembly/strand_correct", "assembly/defuse",
             "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
         ]
 
@@ -174,7 +180,7 @@ class TestAssemblyForceStepsFromRunFlags:
         """--run-star --force scopes to star's cascade; --run-X takes precedence over --force."""
         assert assembly_force_steps_from_run_flags(run_star=True, force=True) == [
             "assembly/star", "assembly/stringtie", "assembly/strand_correct",
-            "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
+            "assembly/defuse", "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
         ]
 
     def test_segemehl_aligner_cascades_to_consumers(self):
@@ -183,7 +189,7 @@ class TestAssemblyForceStepsFromRunFlags:
             aligner="segemehl", run_segemehl=True
         ) == [
             "assembly/segemehl", "assembly/stringtie", "assembly/strand_correct",
-            "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
+            "assembly/defuse", "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
         ]
 
     def test_multiple_run_flags(self):
@@ -191,7 +197,7 @@ class TestAssemblyForceStepsFromRunFlags:
         result = assembly_force_steps_from_run_flags(run_star=True, run_combinr=True)
         assert result == [
             "assembly/star", "assembly/stringtie", "assembly/strand_correct",
-            "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
+            "assembly/defuse", "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
         ]
 
     def test_step_order_is_pipeline_order(self):
@@ -409,6 +415,11 @@ class TestAssemblyStepScalars:
         scalars = self._scalars(tmp_path, "sl_cut")
         assert "max_intron_len=5000" in scalars
         assert any(s.startswith("min_sl_fragment=") for s in scalars)
+
+    def test_defuse_tracks_its_knobs(self, tmp_path):
+        scalars = self._scalars(tmp_path, "defuse")
+        assert any(s.startswith("defuse=") for s in scalars)
+        assert any(s.startswith("defuse_overlap_tolerance=") for s in scalars)
 
     def test_mappers_do_not_track_max_intron(self, tmp_path):
         # segemehl ignores -M natively; a scalar there would force a needless re-map.

@@ -112,7 +112,20 @@ from eukan.cli._framework import (
     "--uniprot", type=click.Path(exists=True, path_type=Path), default=None,
     help="SwissProt FASTA (uniprot_sprot.faa) or prebuilt diamond .dmnd. Enables "
     "homology-based splice-strand correction on unstranded libraries (skipped "
-    "when -S/--strand-specific is given). Without it, strand correction is a no-op.",
+    "when -S/--strand-specific is given), and homology de-fusion with --defuse. "
+    "Without it, both are no-ops.",
+)
+@optgroup.option(
+    "--defuse", is_flag=True, default=False,
+    help="Split chimeric (fused) transcripts using protein homology: an "
+    "ultra-sensitive diamond blastx vs SwissProt that finds >=2 distinct, "
+    "non-overlapping hits on one transcript cuts it at the inter-hit gap. "
+    "Requires --uniprot.",
+)
+@optgroup.option(
+    "--defuse-overlap-tolerance", type=float, default=None,
+    help="Max fractional query overlap (of the shorter hit) for two protein hits to "
+    "still count as distinct evidence of separate genes (default 0.10).",
 )
 @optgroup.option(
     "--memory-gb", type=int, default=None,
@@ -135,6 +148,10 @@ from eukan.cli._framework import (
 @optgroup.option(
     "--run-strand-correct", is_flag=True,
     help="Force re-run homology-based splice-strand correction.",
+)
+@optgroup.option(
+    "--run-defuse", is_flag=True,
+    help="Force re-run homology-based transcript de-fusion.",
 )
 @optgroup.option(
     "--run-sl-detect", is_flag=True,
@@ -168,6 +185,7 @@ def assemble(
     run_jaccard: bool,
     run_map_transcripts: bool,
     run_strand_correct: bool,
+    run_defuse: bool,
     run_sl_detect: bool,
     run_sl_cut: bool,
     run_combinr: bool,
@@ -175,6 +193,8 @@ def assemble(
     rnaspades: bool,
     stringtie_min_junction: float | None,
     combinr_stringent_overlap: float | None,
+    defuse: bool,
+    defuse_overlap_tolerance: float | None,
     sl_sequence: str | None,
     sl_cluster_window: int,
     combinr_path: Path | None,
@@ -215,6 +235,9 @@ def assemble(
     if memory_gb is not None and memory_gb < 1:
         raise click.UsageError("--memory-gb must be at least 1 GiB.")
 
+    if defuse and uniprot is None:
+        raise click.UsageError("--defuse needs a protein DB; supply --uniprot.")
+
     config = AssemblyConfig(**drop_none(
         genome=genome.resolve(),
         work_dir=step_work_dir("assemble"),
@@ -229,6 +252,8 @@ def assemble(
         rnaspades=rnaspades,
         stringtie_min_junction_coverage=stringtie_min_junction,
         combinr_stringent_overlap=combinr_stringent_overlap,
+        defuse=defuse,
+        defuse_overlap_tolerance=defuse_overlap_tolerance,
         sl_sequence=sl_sequence,
         sl_cluster_window=sl_cluster_window,
         combinr_path=resolve_optional_path(combinr_path),
@@ -249,7 +274,7 @@ def assemble(
         run_stringtie=run_stringtie,
         run_rnaspades=run_rnaspades, run_jaccard=run_jaccard,
         run_map_transcripts=run_map_transcripts,
-        run_strand_correct=run_strand_correct,
+        run_strand_correct=run_strand_correct, run_defuse=run_defuse,
         run_sl_detect=run_sl_detect, run_sl_cut=run_sl_cut,
         run_combinr=run_combinr, force=force,
     )

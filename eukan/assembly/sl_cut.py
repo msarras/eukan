@@ -320,18 +320,27 @@ def run_sl_cut(config: AssemblyConfig) -> None:
     sites = load_sl_acceptors(acc_path) if acc_path.exists() else []
     min_segment = config.min_sl_fragment
 
-    # The raw StringTie fallback prefers the jaccard-clipped GFF3 when present (its
-    # fused loci are already split); the de novo genome GFF3 is already built from
-    # jaccard-clipped FASTAs upstream, so it needs no resolver.
-    for stranded, raw, out_name in (
-        ("stringtie.stranded.gff3", resolve_stringtie_models(wd), "stringtie.sl_cut.gff3"),
+    # Model-source precedence (latest variant wins): the homology de-fused
+    # ``*.defuse.gff3`` (produced by defuse.py when --defuse is on), then the
+    # homology-stranded ``*.stranded.gff3`` from strand_correct, then the raw models
+    # (StringTie prefers its jaccard-clipped GFF3; the de novo genome GFF3 is built
+    # from jaccard-clipped FASTAs upstream, so it needs no resolver).
+    for defused, stranded, raw, out_name in (
         (
-            "rnaspades.genome.stranded.gff3",
-            wd / "rnaspades.genome.gff3",
-            "rnaspades.genome.sl_cut.gff3",
+            "stringtie.defuse.gff3", "stringtie.stranded.gff3",
+            resolve_stringtie_models(wd), "stringtie.sl_cut.gff3",
+        ),
+        (
+            "rnaspades.genome.defuse.gff3", "rnaspades.genome.stranded.gff3",
+            wd / "rnaspades.genome.gff3", "rnaspades.genome.sl_cut.gff3",
         ),
     ):
-        src = wd / stranded if (wd / stranded).exists() else raw
+        if (wd / defused).exists():
+            src = wd / defused
+        elif (wd / stranded).exists():
+            src = wd / stranded
+        else:
+            src = raw
         if not src.exists():
             continue
         out = wd / out_name

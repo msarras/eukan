@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from eukan.assembly.combinr import run_combinr
+from eukan.assembly.defuse import run_defuse
 from eukan.assembly.jaccard import run_jaccard
 from eukan.assembly.rnaspades import run_rnaspades
 from eukan.assembly.segemehl import map_reads_segemehl
@@ -60,7 +61,11 @@ def _sl_detect_inputs(config: AssemblyConfig) -> list[Path]:
     return _denovo_genome_bams(config)
 
 
-def _sl_cut_inputs(config: AssemblyConfig) -> list[Path]:
+def _defuse_inputs(config: AssemblyConfig) -> list[Path]:
+    # The models de-fusion reads: the homology-stranded models when strand_correct
+    # produced them, else the raw / jaccard-clipped fallbacks (the same set sl_cut
+    # resolves). Whichever exist are fingerprinted, so re-running strand_correct
+    # re-runs defuse.
     from eukan.assembly.jaccard import resolve_stringtie_models
     from eukan.assembly.strand_correction import (
         _DENOVO_GFF3,
@@ -70,6 +75,23 @@ def _sl_cut_inputs(config: AssemblyConfig) -> list[Path]:
 
     wd = config.work_dir
     return [
+        wd / _STRINGTIE_STRANDED, resolve_stringtie_models(wd),
+        wd / _DENOVO_STRANDED, wd / _DENOVO_GFF3,
+    ]
+
+
+def _sl_cut_inputs(config: AssemblyConfig) -> list[Path]:
+    from eukan.assembly.defuse import DEFUSE_DENOVO, DEFUSE_STRINGTIE
+    from eukan.assembly.jaccard import resolve_stringtie_models
+    from eukan.assembly.strand_correction import (
+        _DENOVO_GFF3,
+        _DENOVO_STRANDED,
+        _STRINGTIE_STRANDED,
+    )
+
+    wd = config.work_dir
+    return [
+        wd / DEFUSE_STRINGTIE, wd / DEFUSE_DENOVO,
         wd / _STRINGTIE_STRANDED, resolve_stringtie_models(wd),
         wd / _DENOVO_STRANDED, wd / _DENOVO_GFF3,
         wd / Artifact.SL_ACCEPTORS.value,
@@ -121,6 +143,16 @@ def _sl_cut_scalars(config: AssemblyConfig) -> list[str]:
     ]
 
 
+def _defuse_scalars(config: AssemblyConfig) -> list[str]:
+    # A changed de-fusion knob re-runs defuse (and cascades to sl_cut/combinr).
+    return [
+        f"defuse={config.defuse}",
+        f"defuse_overlap_tolerance={config.defuse_overlap_tolerance}",
+        f"defuse_blastx_evalue={config.defuse_blastx_evalue}",
+        f"min_sl_fragment={config.min_sl_fragment}",
+    ]
+
+
 def _aligner_step(aligner: str) -> StepSpec:
     """The read-mapping StepSpec for the selected aligner.
 
@@ -141,7 +173,8 @@ def _aligner_step(aligner: str) -> StepSpec:
 
 def _steps_for(aligner: str) -> list[StepSpec]:
     """Assembly steps: <aligner> → stringtie (genome-guided) → rnaspades (de novo)
-    → jaccard → map_transcripts → strand_correct → sl_detect → sl_cut → combinr."""
+    → jaccard → map_transcripts → strand_correct → defuse → sl_detect → sl_cut →
+    combinr."""
     return [
         _aligner_step(aligner),
         # stringtie reads a max-intron-bounded copy of the segemehl read BAM, so a
@@ -171,6 +204,15 @@ def _steps_for(aligner: str) -> list[StepSpec]:
         StepSpec(
             "strand_correct", run_strand_correction, None, "--run-strand-correct",
             inputs=_strand_correct_inputs,
+        ),
+        # Homology de-fusion: splits chimeric transcripts flagged by >=2 distinct
+        # non-overlapping SwissProt hits. Always writes stringtie.defuse.gff3 when it
+        # runs (copy-through if nothing split), so it can declare an output + scalars
+        # for precise resume; skipped entirely (run_assembly skip) unless
+        # --defuse + --uniprot are set.
+        StepSpec(
+            "defuse", run_defuse, "stringtie.defuse.gff3", "--run-defuse",
+            inputs=_defuse_inputs, scalars=_defuse_scalars,
         ),
         # sl_detect/sl_cut have no declared output: with no SL signal sl_detect
         # writes a header-only sl_acceptors.gff3 (zero features) and sl_cut is a
@@ -206,7 +248,11 @@ _DOWNSTREAM: dict[str, tuple[str, ...]] = {
     # (map_transcripts already reaches it, but the edge is now direct).
     "jaccard": ("map_transcripts", "strand_correct"),
     "map_transcripts": ("strand_correct", "sl_detect"),
-    "strand_correct": ("sl_cut",),
+    # strand_correct now feeds defuse, which feeds sl_cut. When defuse is disabled it
+    # is skipped but stays in the cascade, so the transitive closure still reaches
+    # sl_cut (which falls back to the stranded models).
+    "strand_correct": ("defuse",),
+    "defuse": ("sl_cut",),
     "sl_detect": ("sl_cut",),
     "sl_cut": ("combinr",),
 }
@@ -234,6 +280,7 @@ def force_steps_from_run_flags(
     run_jaccard: bool = False,
     run_map_transcripts: bool = False,
     run_strand_correct: bool = False,
+    run_defuse: bool = False,
     run_sl_detect: bool = False,
     run_sl_cut: bool = False,
     run_combinr: bool = False,
@@ -254,7 +301,7 @@ def force_steps_from_run_flags(
         "star": run_star, "segemehl": run_segemehl, "stringtie": run_stringtie,
         "rnaspades": run_rnaspades, "jaccard": run_jaccard,
         "map_transcripts": run_map_transcripts,
-        "strand_correct": run_strand_correct,
+        "strand_correct": run_strand_correct, "defuse": run_defuse,
         "sl_detect": run_sl_detect, "sl_cut": run_sl_cut, "combinr": run_combinr,
     }
     selected = {name for name, on in flags.items() if on and name in valid}
@@ -278,5 +325,6 @@ def run_assembly(
         ASSEMBLY, _steps_for(config.aligner), config,
         force_steps=force_steps,
         skip=lambda s: (s.name == "rnaspades" and not config.rnaspades)
-        or (s.name == "jaccard" and not config.jaccard_clip),
+        or (s.name == "jaccard" and not config.jaccard_clip)
+        or (s.name == "defuse" and not (config.defuse and config.uniprot_db is not None)),
     )

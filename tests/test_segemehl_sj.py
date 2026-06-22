@@ -156,11 +156,11 @@ def test_steps_for_selects_aligner():
     seg = _steps_for("segemehl")
     assert [s.name for s in star] == [
         "star", "stringtie", "rnaspades", "jaccard",
-        "map_transcripts", "strand_correct", "sl_detect", "sl_cut", "combinr",
+        "map_transcripts", "strand_correct", "defuse", "sl_detect", "sl_cut", "combinr",
     ]
     assert [s.name for s in seg] == [
         "segemehl", "stringtie", "rnaspades", "jaccard",
-        "map_transcripts", "strand_correct", "sl_detect", "sl_cut", "combinr",
+        "map_transcripts", "strand_correct", "defuse", "sl_detect", "sl_cut", "combinr",
     ]
     assert seg[0].output == "segemehl_Aligned.sortedByCoord.out.bam"
 
@@ -170,18 +170,18 @@ def test_force_steps_respects_active_aligner():
     # but the active aligner's name is the one in the returned chain.
     assert force_steps_from_run_flags(aligner="star", run_star=True) == [
         "assembly/star", "assembly/stringtie", "assembly/strand_correct",
-        "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
+        "assembly/defuse", "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
     ]
     assert force_steps_from_run_flags(aligner="segemehl", run_segemehl=True) == [
         "assembly/segemehl", "assembly/stringtie", "assembly/strand_correct",
-        "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
+        "assembly/defuse", "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
     ]
     # --force re-runs the active aligner's whole chain.
     assert force_steps_from_run_flags(aligner="segemehl", force=True) == [
         "assembly/segemehl", "assembly/stringtie",
         "assembly/rnaspades", "assembly/jaccard", "assembly/map_transcripts",
-        "assembly/strand_correct", "assembly/sl_detect", "assembly/sl_cut",
-        "assembly/combinr",
+        "assembly/strand_correct", "assembly/defuse", "assembly/sl_detect",
+        "assembly/sl_cut", "assembly/combinr",
     ]
 
 

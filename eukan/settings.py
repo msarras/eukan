@@ -379,6 +379,18 @@ class AssemblyConfig(_StepRunSettings):
     strand_blastx_evalue: float = 1e-5
     """diamond blastx e-value cutoff for a transcript to count as homology-confirmed."""
 
+    # --- Homology-grounded de-fusion (chimeric transcript splitting) ---
+    defuse: bool = False
+    """Split fused transcripts using protein homology: an ``--ultra-sensitive``
+    ``diamond blastx`` vs SwissProt that finds >=2 distinct, non-overlapping protein
+    hits on one transcript flags a chimera of two genes and cuts it at the inter-hit
+    gap. Requires ``--uniprot`` (shares its DB); off by default."""
+    defuse_overlap_tolerance: float = 0.10
+    """Max fractional query overlap (of the shorter hit) for two protein hits to still
+    count as *distinct, non-overlapping* evidence of separate genes (default 0.10)."""
+    defuse_blastx_evalue: float = 1e-5
+    """diamond blastx e-value cutoff for a protein hit to count toward de-fusion."""
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def name(self) -> str:
