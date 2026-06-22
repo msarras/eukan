@@ -43,6 +43,7 @@ import shutil
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TypedDict
 
 import pysam
 from Bio import SeqIO
@@ -203,6 +204,7 @@ def _candidate_troughs(
     *,
     cov: list[int] | None = None,
     greed: float = 0.0,
+    max_adaptive_trough: float = _MAX_ADAPTIVE_TROUGH,
 ) -> list[Trough]:
     """Positions whose jaccard dips to <= the (optionally coverage-adapted) trough.
 
@@ -210,7 +212,7 @@ def _candidate_troughs(
     widened per position toward the deepest jaccard a clean (``n_both ≈ 0``)
     junction can physically reach at the local read-pair depth —
     ``pseudo / (left + right + pseudo)`` from the two flanking hill coverages —
-    times *greed*, capped at :data:`_MAX_ADAPTIVE_TROUGH`. At high depth that
+    times *greed*, capped at *max_adaptive_trough*. At high depth that
     product sits below *max_trough*, so the strict floor stands; at low depth
     (where the pseudocount alone keeps a real junction above 0.05) the gate relaxes
     so the junction becomes a candidate. The flanking-hill and coverage-reposition
@@ -230,7 +232,7 @@ def _candidate_troughs(
             # at the very first scanned position.
             flank = cov[max(1, i - trough_win)] + cov[i]
             achievable = _PSEUDO / (flank + _PSEUDO)
-            thr = max(max_trough, min(greed * achievable, _MAX_ADAPTIVE_TROUGH))
+            thr = max(max_trough, min(greed * achievable, max_adaptive_trough))
         if c <= thr:
             left = jac[i - trough_win]
             right = jac[i]
@@ -298,16 +300,21 @@ def find_clip_points(
     min_delta: float = _MIN_JACCARD_DELTA,
     pseudo: int = _PSEUDO,
     greed: float = 0.0,
+    max_adaptive_trough: float = _MAX_ADAPTIVE_TROUGH,
 ) -> list[int]:
     """Clip positions (sorted, 1-based) for one transcript's fragment spans.
 
     *greed* (>0) makes the trough gate coverage-adaptive so low-coverage fusions
     are split too; 0 keeps Trinity's fixed *max_trough* floor (see
-    :func:`_candidate_troughs`).
+    :func:`_candidate_troughs`). *max_adaptive_trough* caps how far that
+    adaptation may relax the floor at low depth.
     """
     jac = jaccard_array(frags, length, window=window, pseudo=pseudo)
     cov = coverage_array(frags, length)
-    troughs = _candidate_troughs(jac, trough_win, max_trough, cov=cov, greed=greed)
+    troughs = _candidate_troughs(
+        jac, trough_win, max_trough, cov=cov, greed=greed,
+        max_adaptive_trough=max_adaptive_trough,
+    )
     if not troughs:
         return []
     clips = _require_hills(_group_and_pick_best(troughs, trough_win), jac, trough_win, min_delta)
@@ -471,6 +478,29 @@ def iter_fragment_spans(
         bam.close()
 
 
+class _ClipKnobs(TypedDict):
+    """The tunable :func:`find_clip_points` detection knobs (from config)."""
+
+    max_trough: float
+    min_delta: float
+    greed: float
+    max_adaptive_trough: float
+
+
+def _clip_knobs(config: AssemblyConfig) -> _ClipKnobs:
+    """Bundle the config's jaccard detection knobs as ``find_clip_points`` kwargs.
+
+    Single source for both the de novo FASTA and StringTie GTF clip paths so the
+    two stay in lockstep as knobs are added.
+    """
+    return {
+        "max_trough": config.jaccard_max_trough,
+        "min_delta": config.jaccard_min_delta,
+        "greed": config.jaccard_greediness,
+        "max_adaptive_trough": config.jaccard_max_adaptive_trough,
+    }
+
+
 def _clip_one_fasta(config: AssemblyConfig, src: Path, out: Path) -> tuple[int, int, int]:
     """Jaccard-clip every record in *src* into *out*; return (n_in, n_out, n_clipped)."""
     bam = _star_map_to_transcripts(config, src, out.name.replace(".fasta", ""))
@@ -483,7 +513,7 @@ def _clip_one_fasta(config: AssemblyConfig, src: Path, out: Path) -> tuple[int, 
     for ref, spans in iter_fragment_spans(bam):
         if not spans:
             continue
-        clips = find_clip_points(spans, ref_len[ref], greed=config.jaccard_greediness)
+        clips = find_clip_points(spans, ref_len[ref], **_clip_knobs(config))
         if clips:
             clip_map[ref] = clips
 
@@ -801,7 +831,7 @@ def _clip_stringtie_gtf(config: AssemblyConfig) -> tuple[int, int]:
     for ref, spans in iter_fragment_spans(bam):
         if not spans:
             continue
-        clips = find_clip_points(spans, ref_len[ref], greed=config.jaccard_greediness)
+        clips = find_clip_points(spans, ref_len[ref], **_clip_knobs(config))
         if clips:
             clip_map[ref] = clips
 

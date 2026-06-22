@@ -326,6 +326,22 @@ class AssemblyConfig(_StepRunSettings):
     the deepest jaccard physically reachable at the local depth (times this factor),
     making low-coverage fusions splittable while leaving high-coverage behaviour
     unchanged. 0 disables the adaptation (Trinity-faithful fixed floor)."""
+    jaccard_max_trough: float = 0.05
+    """Jaccard trough-depth gate (Trinity's 0.05): a candidate fusion junction's
+    per-position jaccard must dip to <= this for the contig to be cut there. LOWER
+    it for more stringent clipping (a deeper, cleaner bridging trough required, fewer
+    splits); raise it to clip on shallower dips. At low read-pair depth this floor is
+    adapted upward by ``jaccard_greediness`` (bounded by ``jaccard_max_adaptive_trough``)."""
+    jaccard_min_delta: float = 0.35
+    """Jaccard flanking-hill requirement (Trinity's 0.35): the jaccard must rise at
+    least this far above the trough on BOTH sides within the scan window for the dip
+    to be called a fusion junction. RAISE it for more stringent clipping (a sharper
+    hill-trough-hill shape demanded); lower it to accept fainter junctions."""
+    jaccard_max_adaptive_trough: float = 0.30
+    """Ceiling on the coverage-adaptive trough gate: ``jaccard_greediness`` only relaxes
+    ``jaccard_max_trough`` up to this value, so even at very low read-pair depth a dip
+    shallower than this is never treated as a fusion. LOWER it to keep low-coverage
+    clipping stringent; raise it to allow splitting on fainter low-coverage troughs."""
     splice_permissive: bool = False
     diagnose_softclips: bool = True
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from pathlib import Path
 
 import pysam
 import pytest
@@ -125,6 +126,30 @@ def test_greed_does_not_overclip_dense_or_change_highcov_break():
     assert find_clip_points(hi, 700, greed=0.0) == find_clip_points(hi, 700, greed=1.5)
 
 
+# --- tunable detection thresholds ------------------------------------------
+
+
+def test_find_clip_points_honors_max_trough():
+    # A faint two-cluster fusion troughs to ~0.2: missed at the strict 0.05 floor
+    # (greed=0), but a directly-raised max_trough gate catches it with NO coverage
+    # adaptation — reproducing what greediness achieves at this depth.
+    frags = _two_clusters(1, 430)
+    L = 700
+    assert find_clip_points(frags, L, greed=0.0) == []
+    raised = find_clip_points(frags, L, greed=0.0, max_trough=0.30)
+    assert raised == find_clip_points(frags, L, greed=1.5)
+    assert len(raised) == 1
+
+
+def test_find_clip_points_honors_min_delta():
+    # A confident high-coverage clean break is normally one clip; requiring an
+    # impossibly tall flanking hill (> the 1.0 jaccard ceiling) suppresses it.
+    frags = [(i, i + 150) for i in range(1, 80)] + [(i, i + 150) for i in range(400, 480)]
+    L = 700
+    assert len(find_clip_points(frags, L)) == 1
+    assert find_clip_points(frags, L, min_delta=1.5) == []
+
+
 def _dip_jac(length: int, center: int, val: float) -> list[float]:
     arr = [1.0] * (length + 1)
     arr[center] = val
@@ -174,6 +199,20 @@ def test_candidate_troughs_adaptive_cap():
         j._TROUGH_WIN, j._MAX_TROUGH_VAL, cov=cov, greed=1.5,
     )
     assert above == []
+
+
+def test_candidate_troughs_adaptive_cap_is_tunable():
+    # The adaptive cap is a parameter: a 0.20 dip at very low depth is a candidate
+    # under the default 0.30 cap, but a tightened cap (0.10) rejects it — the gate
+    # is never allowed to relax that far, so low-coverage clipping stays stringent.
+    L, center = 600, 300
+    cov = [1] * (L + 1)  # achievable 1/3 -> *1.5 = 0.5, so the cap binds
+    jac = _dip_jac(L, center, 0.20)
+    assert [t.pos for t in _candidate_troughs(
+        jac, j._TROUGH_WIN, j._MAX_TROUGH_VAL, cov=cov, greed=1.5)] == [center]
+    assert _candidate_troughs(
+        jac, j._TROUGH_WIN, j._MAX_TROUGH_VAL, cov=cov, greed=1.5,
+        max_adaptive_trough=0.10) == []
 
 
 # --- coverage --------------------------------------------------------------
@@ -389,6 +428,81 @@ def test_clip_stringtie_gtf_splits_fused_model(tmp_path, monkeypatch):
     assert out.count("\tmRNA\t") == 2  # split into two models
     assert "STRG.1.1.j1" in out and "STRG.1.1.j2" in out
     assert not (tmp_path / "stringtie.spliced.fasta").exists()  # intermediate cleaned
+
+
+def test_clip_threads_config_knobs_into_find_clip_points(tmp_path, monkeypatch):
+    # The config's jaccard detection knobs reach find_clip_points unchanged, so a
+    # user-supplied stringency setting actually governs clip detection.
+    (tmp_path / "genome.fa").write_text(f">chr1\n{GENOME}\n")
+    gtf = tmp_path / "stringtie.gtf"
+    gtf.write_text(
+        'chr1\tStringTie\texon\t1\t40\t.\t+\t.\ttranscript_id "STRG.1.1";\n'
+        'chr1\tStringTie\texon\t51\t90\t.\t+\t.\ttranscript_id "STRG.1.1";\n'
+    )
+    bam = tmp_path / "jaccard_stringtie_Aligned.sortedByCoord.out.bam"
+    _header_bam(bam, {"STRG.1.1": 80})
+    monkeypatch.setattr(j, "_star_map_to_transcripts", lambda cfg, fa, tag: bam)
+    monkeypatch.setattr(j, "iter_fragment_spans", lambda b: iter([("STRG.1.1", [(1, 80)])]))
+    captured: dict[str, float] = {}
+
+    def _capture(spans, length, **kw):
+        captured.update(kw)
+        return []
+
+    monkeypatch.setattr(j, "find_clip_points", _capture)
+
+    config = AssemblyConfig(
+        genome=tmp_path / "genome.fa", work_dir=tmp_path,
+        left_reads=tmp_path / "l.fq", right_reads=tmp_path / "r.fq", num_cpu=1,
+        jaccard_greediness=2.0, jaccard_max_trough=0.08,
+        jaccard_min_delta=0.5, jaccard_max_adaptive_trough=0.4,
+    )
+    j._clip_stringtie_gtf(config)
+    assert captured == {
+        "greed": 2.0, "max_trough": 0.08,
+        "min_delta": 0.5, "max_adaptive_trough": 0.4,
+    }
+
+
+def test_clip_one_fasta_threads_config_knobs(tmp_path, monkeypatch):
+    # The de novo FASTA path (the primary jaccard target — rnaSPAdes contigs) threads
+    # the same config knobs into find_clip_points as the StringTie path, so reverting
+    # it to the old greed-only call would be caught here too.
+    src = tmp_path / "rnaspades.fasta"
+    src.write_text(">c1\n" + "ACGT" * 50 + "\n")
+    bam = tmp_path / "rnaspades.jaccard_Aligned.sortedByCoord.out.bam"
+    _header_bam(bam, {"c1": 200})
+    monkeypatch.setattr(j, "_star_map_to_transcripts", lambda cfg, fa, tag: bam)
+    monkeypatch.setattr(j, "iter_fragment_spans", lambda b: iter([("c1", [(1, 200)])]))
+    captured: dict[str, float] = {}
+
+    def _capture(spans, length, **kw):
+        captured.update(kw)
+        return []
+
+    monkeypatch.setattr(j, "find_clip_points", _capture)
+
+    config = AssemblyConfig(
+        genome=tmp_path / "genome.fa", work_dir=tmp_path,
+        left_reads=tmp_path / "l.fq", right_reads=tmp_path / "r.fq", num_cpu=1,
+        jaccard_greediness=2.0, jaccard_max_trough=0.08,
+        jaccard_min_delta=0.5, jaccard_max_adaptive_trough=0.4,
+    )
+    j._clip_one_fasta(config, src, tmp_path / "rnaspades.jaccard.fasta")
+    assert captured == {
+        "greed": 2.0, "max_trough": 0.08,
+        "min_delta": 0.5, "max_adaptive_trough": 0.4,
+    }
+
+
+def test_assembly_config_jaccard_knob_defaults():
+    # Defaults preserve the Trinity-faithful behaviour (no behavioural change unless
+    # a knob is set), matching the jaccard.py module constants.
+    cfg = AssemblyConfig(genome=Path("g.fa"))
+    assert cfg.jaccard_greediness == 1.5
+    assert cfg.jaccard_max_trough == j._MAX_TROUGH_VAL == 0.05
+    assert cfg.jaccard_min_delta == j._MIN_JACCARD_DELTA == 0.35
+    assert cfg.jaccard_max_adaptive_trough == j._MAX_ADAPTIVE_TROUGH == 0.30
 
 
 def test_run_jaccard_clips_stringtie_when_present(tmp_path, monkeypatch):

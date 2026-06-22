@@ -75,7 +75,32 @@ from eukan.cli._framework import (
     "--jaccard-clip", "-j", is_flag=True,
     help="Enable jaccard clipping of fused transcripts (both rnaSPAdes contigs and "
     "the StringTie GTF), splitting two adjacent loci joined into one model. "
-    "Needs paired reads; greediness via jaccard_greediness.",
+    "Needs paired reads; tune via the --jaccard-* knobs below.",
+)
+@optgroup.option(
+    "--jaccard-greediness", type=float, default=None,
+    help="Jaccard low-coverage sensitivity (default 1.5). Coverage-adaptive slack "
+    "that lets faint fusion troughs in low-depth regions be split: 0 = Trinity's "
+    "fixed floor (most stringent), higher = more aggressive in low coverage. "
+    "Only used with -j.",
+)
+@optgroup.option(
+    "--jaccard-max-trough", type=float, default=None,
+    help="Jaccard trough-depth gate (default 0.05): a junction's jaccard must dip to "
+    "<= this to be cut. LOWER for more stringent clipping (a deeper trough required). "
+    "Only used with -j.",
+)
+@optgroup.option(
+    "--jaccard-min-delta", type=float, default=None,
+    help="Jaccard flanking-hill rise (default 0.35): the jaccard must climb this far "
+    "above the trough on both sides for a cut. RAISE for more stringent clipping. "
+    "Only used with -j.",
+)
+@optgroup.option(
+    "--jaccard-max-adaptive-trough", type=float, default=None,
+    help="Ceiling on the coverage-adaptive trough gate (default 0.30): caps how far "
+    "--jaccard-greediness can relax --jaccard-max-trough in low coverage. LOWER to "
+    "keep low-coverage clipping stringent. Only used with -j.",
 )
 @optgroup.option(
     "--rnaspades/--no-rnaspades", default=True, show_default=True,
@@ -190,6 +215,10 @@ def assemble(
     run_sl_cut: bool,
     run_combinr: bool,
     jaccard_clip: bool,
+    jaccard_greediness: float | None,
+    jaccard_max_trough: float | None,
+    jaccard_min_delta: float | None,
+    jaccard_max_adaptive_trough: float | None,
     rnaspades: bool,
     stringtie_min_junction: float | None,
     combinr_stringent_overlap: float | None,
@@ -249,6 +278,10 @@ def assemble(
         aligner=aligner,
         align_mode=align_mode,
         jaccard_clip=jaccard_clip,
+        jaccard_greediness=jaccard_greediness,
+        jaccard_max_trough=jaccard_max_trough,
+        jaccard_min_delta=jaccard_min_delta,
+        jaccard_max_adaptive_trough=jaccard_max_adaptive_trough,
         rnaspades=rnaspades,
         stringtie_min_junction_coverage=stringtie_min_junction,
         combinr_stringent_overlap=combinr_stringent_overlap,
