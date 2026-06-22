@@ -16,7 +16,7 @@ from contextlib import contextmanager, suppress
 from datetime import datetime
 from pathlib import Path
 
-from eukan.exceptions import ConfigurationError
+from eukan.exceptions import ConfigurationError, GFFValidationError
 from eukan.infra.logging import get_logger
 from eukan.infra.manifest import (
     RunManifest,
@@ -96,6 +96,32 @@ def fingerprint_inputs(
             parts.append(f"{path}=MISSING")
     parts.extend(sorted(extra or []))
     return hashlib.md5("\n".join(parts).encode()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Output integrity policy
+# ---------------------------------------------------------------------------
+
+# Re-hashing large binary outputs (e.g. assembly BAMs) on every resume is
+# expensive and rarely worth it: they don't silently corrupt without also
+# changing size, and the always-on existence + non-empty check already catches
+# the common loss cases. Verify md5 only for outputs that are either a known
+# small/text artifact type or under a size ceiling.
+_MD5_VERIFY_MAX_BYTES = 256 * 1024 * 1024  # 256 MiB
+_MD5_VERIFY_SUFFIXES = frozenset(
+    {".gff", ".gff3", ".gtf", ".bed", ".fa", ".fasta", ".faa", ".fna",
+     ".json", ".tsv", ".txt"}
+)
+
+
+def _should_verify_md5(path: Path) -> bool:
+    """Whether to checksum-verify *path* on resume (cheap-and-worthwhile only)."""
+    if path.suffix.lower() in _MD5_VERIFY_SUFFIXES:
+        return True
+    try:
+        return path.stat().st_size <= _MD5_VERIFY_MAX_BYTES
+    except OSError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -193,17 +219,24 @@ def is_step_complete(
     step_name: str,
     input_files: list[Path] | None = None,
     input_scalars: list[str] | None = None,
+    *,
+    verify_md5: bool = True,
 ) -> Path | None:
     """Check if a step was completed in a previous run *and is still current*.
 
-    Returns the output path if complete and the file exists, else None.
+    Returns the recorded output path if the step is complete and its output is
+    still intact, else ``None`` so the caller re-runs it. "Intact" means the
+    output exists, is non-empty, matches its recorded md5 (for cheap-to-hash
+    artifacts — see :func:`_should_verify_md5`), and parses as GFF when it has a
+    ``.gff``/``.gff3`` suffix. A lost or corrupted output is rebuilt rather than
+    trusted; a WARNING is logged here, at the rebuild decision, so the loss
+    stays visible. Pass ``verify_md5=False`` to skip the checksum step.
+
     When *input_files* / *input_scalars* are given and the step recorded an
     input fingerprint, a mismatch (an upstream output was rewritten, a new
-    input appeared, or a tracked config value changed) makes the step stale:
-    returns None so the caller re-runs it instead of reusing an output built
-    from inputs that no longer apply. A step with no recorded fingerprint
-    (older manifest, or no declared inputs) is not treated as stale. Pure
-    predicate: callers own any user-visible logging.
+    input appeared, or a tracked config value changed) also makes the step
+    stale and returns ``None``. A step with no recorded fingerprint (older
+    manifest, or no declared inputs) is not treated as stale on that account.
     """
     record = manifest.steps.get(step_name)
     if not record or record.status != StepStatus.completed:
@@ -211,8 +244,40 @@ def is_step_complete(
     if not record.output_file:
         return None
     path = Path(record.output_file)
+
     if not path.exists():
+        log.warning(
+            "[%s] Output recorded complete but now missing (%s); will rebuild.",
+            step_name, path,
+        )
         return None
+    if path.stat().st_size == 0:
+        log.warning(
+            "[%s] Output recorded complete but empty (%s); will rebuild.",
+            step_name, path,
+        )
+        return None
+    if (
+        verify_md5
+        and record.output_md5 is not None
+        and _should_verify_md5(path)
+        and md5_file(path) != record.output_md5
+    ):
+        log.warning(
+            "[%s] Output checksum changed since it was written (%s); will rebuild.",
+            step_name, path,
+        )
+        return None
+    if path.suffix in (".gff", ".gff3"):
+        try:
+            validate_gff(path)
+        except GFFValidationError as exc:
+            log.warning(
+                "[%s] Output is no longer valid GFF (%s); will rebuild.",
+                step_name, exc,
+            )
+            return None
+
     if (
         (input_files or input_scalars)
         and record.input_md5 is not None
@@ -233,81 +298,6 @@ def clean_interrupted_step(work_dir: Path, step_name: str, step_dir: Path | None
     sdir = _resolve_step_dir(work_dir, step_name, step_dir)
     if sdir.exists():
         shutil.rmtree(sdir)
-
-
-# ---------------------------------------------------------------------------
-# Manifest output validation
-# ---------------------------------------------------------------------------
-
-
-def validate_or_raise(
-    manifest: RunManifest,
-    expected_steps: list[str],
-    step_to_flag: dict[str, str] | None = None,
-) -> None:
-    """Validate completed step outputs; raise StaleManifestError on any error.
-
-    Replaces the pipeline-level boilerplate of "log each error then
-    raise SystemExit(1)" — that bypasses the CLI's structured error
-    handling. Use this from inside library code; the CLI handler renders
-    StaleManifestError uniformly.
-    """
-    from eukan.exceptions import StaleManifestError
-
-    errors = validate_step_outputs(manifest, expected_steps, step_to_flag)
-    if errors:
-        raise StaleManifestError(errors)
-
-
-def validate_step_outputs(
-    manifest: RunManifest,
-    expected_steps: list[str],
-    step_to_flag: dict[str, str] | None = None,
-) -> list[str]:
-    """Validate that completed steps have valid output files.
-
-    Checks each expected step in the manifest: if marked completed,
-    verifies the output file exists and is non-empty. For GFF outputs,
-    additionally verifies the file is structurally valid. Returns a list
-    of error messages (empty if all OK).
-
-    Args:
-        manifest: The run manifest to check.
-        expected_steps: Manifest step keys to validate.
-        step_to_flag: Optional mapping of step key to CLI flag for
-            actionable error messages. Falls back to the raw step key.
-    """
-    from eukan.exceptions import GFFValidationError
-
-    errors: list[str] = []
-    flag_map = step_to_flag or {}
-    for key in expected_steps:
-        record = manifest.steps.get(key)
-        if not record or record.status != StepStatus.completed:
-            continue
-        if not record.output_file:
-            continue
-        output = Path(record.output_file)
-        flag = flag_map.get(key, f"(step: {key})")
-
-        if not output.exists() or output.stat().st_size == 0:
-            state = "empty" if output.exists() else "missing"
-            errors.append(
-                f"Step '{key}' is marked complete but output is "
-                f"{state}: {output}. Re-run with: {flag}"
-            )
-            continue
-
-        if output.suffix in (".gff", ".gff3"):
-            try:
-                validate_gff(output)
-            except GFFValidationError as exc:
-                errors.append(
-                    f"Step '{key}' is marked complete but output is "
-                    f"unparseable: {exc}. Re-run with: {flag}"
-                )
-
-    return errors
 
 
 # ---------------------------------------------------------------------------

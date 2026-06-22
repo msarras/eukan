@@ -2,9 +2,9 @@
 
 Doesn't fit ``run_simple_pipeline``: the search step writes two JSON
 caches that the FASTA/GFF3 annotation steps read back, so the steps
-aren't independent in the way the linear driver assumes. StepSpec is
-still used for the step declarations to keep the shape consistent with
-the other pipelines.
+aren't independent in the way the linear driver assumes. Each step is
+driven directly via ``run_orchestrated_step`` with explicit input
+fingerprints (see :func:`_func_step_fingerprints`).
 
 The homology search has two modes controlled by ``config.homology_db``:
 
@@ -37,8 +37,8 @@ from eukan.infra.manifest import (
     save_manifest,
     step_key,
 )
-from eukan.infra.pipeline import StepSpec, run_orchestrated_step
-from eukan.infra.steps import validate_or_raise
+from eukan.infra.pipeline import run_orchestrated_step
+from eukan.infra.steps import is_step_complete
 from eukan.settings import FunctionalConfig
 
 log = get_logger(__name__)
@@ -120,15 +120,51 @@ def _search_and_cache(
     return homology_json
 
 
-# Step specs used for the validate_or_raise stale-output check. fn fields
-# are the inner search/annotate functions; the actual call sites below
-# wrap them with the JSON-cache plumbing that doesn't fit StepSpec's
-# (config) → output contract.
-_STEPS: list[StepSpec] = [
-    StepSpec("search",         _search_and_cache, flag="--force"),
-    StepSpec("annotate_fasta", annotate_fasta,    flag="--force"),
-    StepSpec("annotate_gff3",  annotate_gff3,     flag="--force"),
-]
+def _func_step_fingerprints(
+    config: FunctionalConfig,
+    homology_json: Path,
+    hmmscan_json: Path,
+) -> dict[str, tuple[list[Path], list[str]]]:
+    """Declared ``(input_files, input_scalars)`` per step, keyed by bare name.
+
+    The single source of truth shared by the resume guard and the
+    ``run_orchestrated_step`` calls below, so their fingerprints can't drift.
+    ``fingerprint_inputs`` keys each file by ``path=md5`` — so a different
+    proteins/GFF3 file (by name *or* content) flips the digest and re-runs the
+    step, while an identical input (same filename + same content) reuses the
+    cached result. Databases enter as path-string scalars, not content-hashed:
+    they're multi-GB and re-hashing them every run would be prohibitive.
+    ``num_cpu`` is deliberately excluded — thread count doesn't change results.
+    The annotate steps depend on both JSON caches, so a re-run of ``search``
+    (which rewrites them) cascades into re-annotation; this also gives the
+    otherwise-untracked ``hmmscan.json`` an integrity-relevant fingerprint.
+    """
+    if config.homology_db == "kofam":
+        db_scalars = [
+            f"kofam_db={config.kofam_db}",
+            f"ko_list={config.ko_list_path}",
+        ]
+    else:
+        db_scalars = [f"uniprot_db={config.uniprot_db}"]
+    search_scalars = [
+        f"homology_db={config.homology_db}",
+        f"evalue={config.evalue}",
+        f"pfam_db={config.pfam_db}",
+        *db_scalars,
+    ]
+    steps: dict[str, tuple[list[Path], list[str]]] = {
+        "search": ([config.proteins], search_scalars),
+        "annotate_fasta": (
+            [config.proteins, homology_json, hmmscan_json],
+            [f"homology_db={config.homology_db}"],
+        ),
+    }
+    if config.gff3_path:
+        steps["annotate_gff3"] = (
+            [config.gff3_path, homology_json, hmmscan_json],
+            [f"homology_db={config.homology_db}"],
+        )
+    return steps
 
 
 def run_functional_annotation(
@@ -137,41 +173,63 @@ def run_functional_annotation(
     """Run the full functional annotation pipeline."""
     work_dir = config.work_dir
     manifest = get_or_create_manifest(work_dir, config)
-
-    expected = [step_key(FUNCTIONAL, s.name) for s in _STEPS]
-    flag_map = {key: "--force" for key in expected}
-    if not force:
-        validate_or_raise(manifest, expected, flag_map)
-
     save_manifest(work_dir, manifest)
 
     homology_json = _homology_cache_path(config)
     hmmscan_json = config.proteins.parent / f"{config.proteins.stem}.hmmscan.json"
 
+    fingerprints = _func_step_fingerprints(config, homology_json, hmmscan_json)
+
+    # Identical input already fully annotated -> a friendly no-op. A different
+    # proteins/GFF3 file (name or content) flips at least one fingerprint, so
+    # the guard falls through to a normal run without needing -f.
+    if not force and all(
+        is_step_complete(
+            manifest, step_key(FUNCTIONAL, name),
+            input_files=ifiles, input_scalars=iscalars,
+        ) is not None
+        for name, (ifiles, iscalars) in fingerprints.items()
+    ):
+        fasta_out = config.proteins.parent / f"{config.proteins.stem}.mod{config.proteins.suffix}"
+        log.info(
+            "Already annotated %s -> %s; re-run with -f to recompute.",
+            config.proteins.name, fasta_out.name,
+        )
+        return
+
+    search_files, search_scalars = fingerprints["search"]
     run_orchestrated_step(
         work_dir, manifest, step_key(FUNCTIONAL, "search"),
         _search_and_cache,
         config, homology_json, hmmscan_json,
         step_dir=work_dir / "search",
         force=force,
+        input_files=search_files,
+        input_scalars=search_scalars,
     )
 
     homology_res = json.loads(homology_json.read_text())
     hmmscan_res = json.loads(hmmscan_json.read_text())
 
+    fasta_files, fasta_scalars = fingerprints["annotate_fasta"]
     run_orchestrated_step(
         work_dir, manifest, step_key(FUNCTIONAL, "annotate_fasta"),
         annotate_fasta, config.proteins, homology_res, hmmscan_res,
         config.homology_db,
         step_dir=work_dir / "annotate_fasta",
         force=force,
+        input_files=fasta_files,
+        input_scalars=fasta_scalars,
     )
 
     if config.gff3_path:
+        gff3_files, gff3_scalars = fingerprints["annotate_gff3"]
         run_orchestrated_step(
             work_dir, manifest, step_key(FUNCTIONAL, "annotate_gff3"),
             annotate_gff3, config.gff3_path, homology_res, hmmscan_res,
             work_dir, config.homology_db,
             step_dir=work_dir / "annotate_gff3",
             force=force,
+            input_files=gff3_files,
+            input_scalars=gff3_scalars,
         )

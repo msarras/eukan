@@ -216,7 +216,33 @@ class TestAssemblyForceStepsFromRunFlags:
 
 class TestRunOrchestratedStepOutput:
     """A declared output_file is recorded in the manifest even when missing,
-    so validate_step_outputs can flag it on resume instead of it being lost."""
+    so is_step_complete flags it on resume (and the step rebuilds) instead of
+    it being lost."""
+
+    def test_completed_step_with_deleted_output_reruns(self, tmp_path):
+        """Deleting a completed step's output makes the next run rebuild it,
+        no force flag needed (auto-rebuild, not a hard stop)."""
+        manifest = RunManifest()
+        out = tmp_path / "step" / "expected.txt"
+        runs: list[int] = []
+
+        def writes_output():
+            runs.append(1)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text("done")
+            return None
+
+        run_orchestrated_step(
+            tmp_path, manifest, "annotation/thing", writes_output,
+            step_dir=tmp_path / "step", output_file=out,
+        )
+        out.unlink()  # output lost between runs
+        run_orchestrated_step(
+            tmp_path, manifest, "annotation/thing", writes_output,
+            step_dir=tmp_path / "step", output_file=out,
+        )
+        assert runs == [1, 1]  # rebuilt rather than trusting the manifest
+        assert out.exists()
 
     def test_missing_declared_output_is_still_recorded(self, tmp_path):
         manifest = RunManifest()

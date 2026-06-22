@@ -30,7 +30,6 @@ from eukan.infra.steps import (
     is_step_complete,
     is_step_interrupted,
     pipeline_step,
-    validate_or_raise,
 )
 
 log = get_logger(__name__)
@@ -139,10 +138,10 @@ def run_simple_pipeline(
     if forced:
         active = [s for s in steps if step_key(pipeline, s.name) in forced]
     else:
+        # A missing/corrupt output of a completed step is detected per-step by
+        # run_orchestrated_step -> is_step_complete (which returns None and the
+        # step rebuilds), so no up-front validation pass is needed here.
         active = [s for s in steps if not (skip and skip(s))]
-        expected = [step_key(pipeline, s.name) for s in active]
-        flag_map = {step_key(pipeline, s.name): s.flag for s in steps if s.flag}
-        validate_or_raise(manifest, expected, flag_map)
 
     save_manifest(config.manifest_dir, manifest)
 
@@ -254,10 +253,10 @@ def run_orchestrated_step(
 
         if output_file is not None:
             # Record the declared output even when it's missing: pipeline_step
-            # only checksums a path that exists, and validate_step_outputs
-            # flags a completed step whose recorded output is missing/empty on
-            # the next run — instead of silently recording "no output" and
-            # returning the path as if the step had succeeded.
+            # only checksums a path that exists, and is_step_complete flags a
+            # completed step whose recorded output is missing/empty on the next
+            # run (rebuilding it) — instead of silently recording "no output"
+            # and returning the path as if the step had succeeded.
             step.output_file = str(output_file)
             return output_file
         if isinstance(result, (str, Path)):

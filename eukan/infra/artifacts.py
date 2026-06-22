@@ -23,6 +23,10 @@ from enum import StrEnum
 from pathlib import Path
 
 from eukan.infra.layout import PIPELINE_SUBDIRS, sibling_step_dir
+from eukan.infra.logging import get_logger
+from eukan.infra.manifest import RunManifest, StepStatus
+
+log = get_logger(__name__)
 
 
 class Artifact(StrEnum):
@@ -85,6 +89,52 @@ def find(work_dir: Path, artifact: Artifact) -> Path | None:
     for path in _candidates(work_dir, artifact.value, _PRODUCER.get(artifact)):
         if path.exists():
             return path
+    return None
+
+
+# Producer label (the run-dir subdir in _PRODUCER) -> manifest step-key prefix.
+_PRODUCER_MANIFEST_PREFIX: dict[str, str] = {
+    "assemble":     "assembly",
+    "mask-repeats": "repeats",
+    "annotate":     "annotation",
+    "func-annot":   "functional",
+}
+
+
+def _producer_completed(manifest: RunManifest, producer: str) -> bool:
+    """True if any step of *producer*'s pipeline is recorded ``completed``."""
+    prefix = _PRODUCER_MANIFEST_PREFIX.get(producer)
+    if prefix is None:
+        return False
+    return any(
+        key.startswith(f"{prefix}/") and rec.status == StepStatus.completed
+        for key, rec in manifest.steps.items()
+    )
+
+
+def find_or_warn(
+    work_dir: Path, artifact: Artifact, manifest: RunManifest | None,
+) -> Path | None:
+    """Like :func:`find`, but warn when a *previously produced* artifact is gone.
+
+    Optional cross-pipeline artifacts (RepeatMasker hints, the STAR splice
+    summary, ...) are produced by one pipeline and consumed by another, which
+    cannot rebuild them. :func:`find` returns ``None`` for a missing one and the
+    consumer falls back silently. This variant additionally logs a WARNING when
+    the producing step is recorded *completed* in the manifest yet the artifact
+    is missing — genuine loss — while staying silent when the producer never ran
+    (the artifact is legitimately absent). ``manifest=None`` disables the warning.
+    """
+    path = find(work_dir, artifact)
+    if path is not None:
+        return path
+    producer = _PRODUCER.get(artifact)
+    if manifest is not None and producer is not None and _producer_completed(manifest, producer):
+        log.warning(
+            "%s was produced by a completed '%s' run but is now missing; "
+            "proceeding without it.",
+            artifact.value, producer,
+        )
     return None
 
 

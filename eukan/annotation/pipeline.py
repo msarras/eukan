@@ -23,7 +23,7 @@ from eukan.infra.manifest import (
     step_key,
 )
 from eukan.infra.pipeline import run_orchestrated_step
-from eukan.infra.steps import step_dir, validate_or_raise
+from eukan.infra.steps import is_step_complete, step_dir
 from eukan.settings import PipelineConfig
 from eukan.validation import sanitize_genome_fasta, validate_fasta
 
@@ -165,15 +165,16 @@ def run_annotation_pipeline(
             manifest.steps.pop(step, None)
         save_manifest(config.manifest_dir, manifest)
     else:
-        # Validate manifest: check completed steps have valid output
+        # Nothing to do only if every step is already recorded AND the final
+        # consensus output is still intact (existence + non-empty + valid GFF).
+        # A missing/corrupt output makes is_step_complete return None, so we
+        # fall through to _execute_steps, which rebuilds it via the same
+        # per-step check. Any step not yet in the manifest is also pending.
         expected = _expected_steps(config)
-        validate_or_raise(manifest, expected, _STEP_TO_FLAG)
-
-        # Check if there's any work to do
         pending = [s for s in expected if s not in manifest.steps]
         if not pending:
-            final = config.work_dir / "final.gff3"
-            if final.exists():
+            final = is_step_complete(manifest, step_key(ANNOTATION, "evm_consensus_models"))
+            if final is not None:
                 log.info("All steps complete. Use --run-* flags to re-run specific steps.")
                 return final
         save_manifest(config.manifest_dir, manifest)
@@ -206,11 +207,6 @@ _ANNOTATION_STEP_FLAGS: dict[str, str] = {
     "snap":                 "--run-snap",
     "codingquarry":         "--run-snap",
     "evm_consensus_models": "--run-consensus",
-}
-
-# Manifest-key form of the same mapping, for validate_step_outputs.
-_STEP_TO_FLAG: dict[str, str] = {
-    step_key(ANNOTATION, name): flag for name, flag in _ANNOTATION_STEP_FLAGS.items()
 }
 
 
