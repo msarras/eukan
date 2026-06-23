@@ -1,8 +1,8 @@
 """Homology-grounded transcript de-fusion: split chimeric transcripts.
 
-In gene-dense / polycistronic genomes a noisy genome-guided assembler (StringTie)
-can fuse two adjacent genes into one transcript that the de novo path kept separate.
-Overlap arithmetic can't tell a fusion from a real long gene, but protein homology
+In gene-dense / polycistronic genomes a noisy assembler can fuse two adjacent genes
+into one transcript. Overlap arithmetic can't tell a fusion from a real long gene,
+but protein homology
 can: an ``--ultra-sensitive`` ``diamond blastx`` of each transcript against SwissProt
 that finds **>=2 distinct subjects on non-overlapping query ranges** is direct
 evidence of a chimera, and the gap between the hit regions tells us where to cut.
@@ -16,10 +16,10 @@ so an opposite-strand fusion is re-oriented correctly.
 
 Runs **after** ``strand_correct`` (so it splits the homology-stranded models) and
 **before** ``sl_cut`` (which prefers the ``*.defuse.gff3`` outputs). A no-op unless
-``--defuse`` and ``--uniprot`` are both given; it then always writes
-``stringtie.defuse.gff3`` (copy-through when nothing is split) plus, when the de novo
-set is present, ``rnaspades.genome.defuse.gff3`` and a ``defuse.tsv`` audit table.
-Read coverage at each seam is logged as **advisory** only (never gates a split).
+``--defuse`` and ``--uniprot`` are both given; it then always writes a
+``<track>.genome.defuse.gff3`` per Trinity track (copy-through when nothing is split)
+plus a ``defuse.tsv`` audit table. Read coverage at each seam is logged as
+**advisory** only (never gates a split).
 """
 
 from __future__ import annotations
@@ -36,18 +36,15 @@ from eukan.assembly.jaccard import (
     _partition_exons,
     _Tx,
     _write_transcript_models_gff3,
-    resolve_stringtie_models,
 )
 from eukan.assembly.strand_correction import (
-    _DENOVO_GFF3,
-    _DENOVO_STRANDED,
     _DIAMOND_BLOCK_SIZE,
     _DIAMOND_INDEX_CHUNKS,
-    _STRINGTIE_STRANDED,
     _coding_strand,
     _resolve_diamond_db,
     _stitch,
 )
+from eukan.assembly.tracks import mapped_transcript_stems
 from eukan.infra.genome import ContigIndex
 from eukan.infra.logging import get_logger
 from eukan.infra.runner import run_cmd
@@ -55,9 +52,6 @@ from eukan.settings import AssemblyConfig
 
 log = get_logger(__name__)
 
-# Output model files (read preferentially by sl_cut.run_sl_cut).
-DEFUSE_STRINGTIE = "stringtie.defuse.gff3"
-DEFUSE_DENOVO = "rnaspades.genome.defuse.gff3"
 _QUERY_FASTA = "defuse_query.fasta"
 _HITS_TSV = "defuse_blastx.tsv"
 _AUDIT_TSV = "defuse.tsv"
@@ -256,26 +250,21 @@ def _defuse_one_set(
 def run_defuse(config: AssemblyConfig) -> None:
     """Split chimeric transcripts flagged by >=2 distinct non-overlapping protein hits.
 
-    No-op (skipped by the pipeline) unless ``--defuse`` and ``--uniprot`` are set. The
-    StringTie set is always rewritten to ``stringtie.defuse.gff3`` (copy-through when
-    nothing is split); the de novo set, when present, to ``rnaspades.genome.defuse.gff3``.
+    No-op (skipped by the pipeline) unless ``--defuse`` and ``--uniprot`` are set.
+    Each Trinity track is rewritten to ``<track>.genome.defuse.gff3`` (copy-through
+    when nothing is split).
     """
     wd = config.work_dir
 
-    # Inputs: prefer the homology-stranded models from strand_correct, else the raw /
-    # jaccard-clipped fallbacks (exactly what sl_cut resolves).
-    st_in = wd / _STRINGTIE_STRANDED
-    if not st_in.exists():
-        st_in = resolve_stringtie_models(wd)
-    dn_in = wd / _DENOVO_STRANDED
-    if not dn_in.exists():
-        dn_in = wd / _DENOVO_GFF3
-
+    # Inputs per track: prefer the homology-stranded models from strand_correct,
+    # else the raw genome GFF3 (do NOT read our own .defuse.gff3 output).
     sets: list[tuple[str, Path, Path]] = []
-    if st_in.exists():
-        sets.append(("st", st_in, wd / DEFUSE_STRINGTIE))
-    if dn_in.exists():
-        sets.append(("rs", dn_in, wd / DEFUSE_DENOVO))
+    for stem in mapped_transcript_stems():
+        src = wd / f"{stem}.stranded.gff3"
+        if not src.exists():
+            src = wd / f"{stem}.gff3"
+        if src.exists():
+            sets.append((stem, src, wd / f"{stem}.defuse.gff3"))
     if not sets:
         log.warning("No transcript models to de-fuse.")
         return

@@ -81,16 +81,18 @@ _REPOSITION_HALF_WIN = _TROUGH_WIN // 2  # coverage-reposition search radius (10
 # single transcript that simply has a thin patch).
 _MAX_ADAPTIVE_TROUGH = 0.30
 
-# The de novo FASTAs the map_transcripts step consumes; the jaccard step rewrites
-# each into a ``.jaccard.fasta`` sibling that ``star.map_transcripts``
-# prefers when present.
+# The Trinity FASTAs the map_transcripts step consumes (both de novo and
+# genome-guided); the jaccard step rewrites each into a ``.jaccard.fasta`` sibling
+# that ``star.map_transcripts`` prefers when present.
 _TRANSCRIPT_FASTAS = (
-    "rnaspades.fasta",
+    "trinity-denovo.fasta",
+    "trinity-gg.fasta",
 )
 
-# The genome-guided StringTie GTF and the clipped sibling the jaccard step writes
-# for it. StringTie can fuse two adjacent loci into one transcript; clipping its
-# spliced models at read-pair troughs splits those the way the de novo path does.
+# DORMANT (StringTie path): the genome-guided StringTie GTF and the clipped sibling
+# the jaccard step writes for it. Not produced by the active Trinity pipeline, so
+# the run_jaccard StringTie branch and resolve_stringtie_models below are no-ops
+# unless the kept-but-unwired stringtie module is re-activated.
 _STRINGTIE_GTF = "stringtie.gtf"
 STRINGTIE_JACCARD_GFF3 = "stringtie.jaccard.gff3"
 

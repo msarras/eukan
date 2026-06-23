@@ -131,7 +131,7 @@ def test_consensus_from_strong_verdict(tmp_path):
 
 def test_consensus_from_de_novo_fallback(tmp_path):
     # No override, no verdict file → fall back to the dominant de novo insertion.
-    bam = tmp_path / "rnaspades.genome.bam"
+    bam = tmp_path / "trinity-denovo.genome.bam"
     _make_bam(bam, [
         ("t1", 0, 100, [(0, 10), (1, 16), (0, 10)], "A" * 10 + SL16 + "A" * 10),
         ("t2", 0, 200, [(0, 10), (1, 16), (0, 10)], "A" * 10 + SL16 + "A" * 10),
@@ -150,14 +150,14 @@ def test_detect_pools_reads_and_de_novo(tmp_path):
     cfg = _config(tmp_path, sl_sequence=SL)
     _make_bam(tmp_path / "segemehl_Aligned.sortedByCoord.out.bam",
               [("r1", 0, 100, [(4, 10), (0, 30)], SL + "A" * 30)])           # acceptor 101 (+)
-    _make_bam(tmp_path / "rnaspades.genome.bam",
+    _make_bam(tmp_path / "trinity-denovo.genome.bam",
               [("t1", 0, 100, [(0, 10), (1, 10), (0, 10)], "A" * 10 + SL + "A" * 10)])  # 111 (+)
 
     detect_sl_acceptors(cfg)
 
     sites = {(s.pos, s.strand): s for s in load_sl_acceptors(tmp_path / "sl_acceptors.gff3")}
     assert (101, "+") in sites and sites[(101, "+")].sources == ("reads",)
-    assert (111, "+") in sites and sites[(111, "+")].sources == ("rnaspades",)
+    assert (111, "+") in sites and sites[(111, "+")].sources == ("trinity-denovo",)
 
 
 def test_detect_clusters_and_unions_sources(tmp_path):
@@ -165,7 +165,7 @@ def test_detect_clusters_and_unions_sources(tmp_path):
     # Two acceptors 2 bp apart (within the window) from different sources → one site.
     _make_bam(tmp_path / "segemehl_Aligned.sortedByCoord.out.bam",
               [("r1", 0, 100, [(4, 10), (0, 30)], SL + "A" * 30)])                       # 101
-    _make_bam(tmp_path / "rnaspades.genome.bam",
+    _make_bam(tmp_path / "trinity-denovo.genome.bam",
               [("t1", 0, 102, [(4, 10), (0, 30)], SL + "A" * 30)])                       # 103
     detect_sl_acceptors(cfg)
 
@@ -173,7 +173,7 @@ def test_detect_clusters_and_unions_sources(tmp_path):
     plus = [s for s in sites if s.strand == "+"]
     assert len(plus) == 1
     assert plus[0].support == 2
-    assert set(plus[0].sources) == {"reads", "rnaspades"}
+    assert set(plus[0].sources) == {"reads", "trinity-denovo"}
 
 
 def test_detect_recovers_antisense_leading_clip(tmp_path):
@@ -181,19 +181,19 @@ def test_detect_recovers_antisense_leading_clip(tmp_path):
     clip (NODE_574) now yields a '+' acceptor — previously dropped because only the
     trailing clip was inspected for reverse reads."""
     cfg = _config(tmp_path, sl_sequence=SL16)
-    _make_bam(tmp_path / "rnaspades.genome.bam",
+    _make_bam(tmp_path / "trinity-denovo.genome.bam",
               [("t1", 16, 100, [(4, 16), (0, 20)], SL16 + "A" * 20)])  # reverse, leading SL
     detect_sl_acceptors(cfg)
 
     sites = {(s.pos, s.strand): s for s in load_sl_acceptors(tmp_path / "sl_acceptors.gff3")}
-    assert (101, "+") in sites and sites[(101, "+")].sources == ("rnaspades",)
+    assert (101, "+") in sites and sites[(101, "+")].sources == ("trinity-denovo",)
 
 
 def test_detect_matches_core_of_overlong_consensus(tmp_path):
     """Fix B: a 25 nt read-verdict consensus is matched by its conserved 16 nt 3'
     core, so a 17 nt captured leader carrying only the core is still detected."""
     cfg = _config(tmp_path, sl_sequence="AAAGCTACAGTTTCTGTACTTTATT")  # core = GTTTCTGTACTTTATT
-    _make_bam(tmp_path / "rnaspades.genome.bam",
+    _make_bam(tmp_path / "trinity-denovo.genome.bam",
               [("t1", 0, 100, [(4, 17), (0, 30)], "AGTTTCTGTACTTTATT" + "A" * 30)])
     detect_sl_acceptors(cfg)
 
@@ -206,7 +206,7 @@ def test_detect_is_orientation_aware(tmp_path):
     a genuinely reverse-complement leader at a trailing clip is kept as '-'."""
     from eukan.assembly.sl_depletion import _revcomp
     cfg = _config(tmp_path, sl_sequence=SL16)
-    _make_bam(tmp_path / "rnaspades.genome.bam", [
+    _make_bam(tmp_path / "trinity-denovo.genome.bam", [
         ("wrong", 0, 100, [(0, 20), (4, 16)], "A" * 20 + SL16),            # fwd SL, '-' geom → drop
         ("right", 0, 200, [(0, 20), (4, 16)], "A" * 20 + _revcomp(SL16)),  # RC SL, '-' geom → keep
     ])
@@ -232,8 +232,8 @@ def test_acceptor_site_roundtrip(tmp_path):
     out = tmp_path / "acc.gff3"
     from eukan.assembly.sl_acceptors import _write_acceptors
     sites = [
-        AcceptorSite("chr1", 500, "+", 12, ("reads", "rnaspades")),
-        AcceptorSite("chr2", 30, "-", 3, ("rnaspades",)),
+        AcceptorSite("chr1", 500, "+", 12, ("reads", "trinity-denovo")),
+        AcceptorSite("chr2", 30, "-", 3, ("trinity-denovo",)),
     ]
     _write_acceptors(sites, out)
     assert load_sl_acceptors(out) == sites

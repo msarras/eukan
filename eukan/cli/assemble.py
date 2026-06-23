@@ -66,16 +66,18 @@ from eukan.cli._framework import (
 @optgroup.option(
     "--max-intron", "-M", type=int, default=5000, show_default=True,
     help="Maximum intron length, hard-imposed: transcript models are split at any "
-    "longer intron and StringTie reads a bounded BAM. Changing it on a resumed run "
-    "re-runs stringtie/sl_cut/combinr automatically; re-deriving hint files or "
-    "recovering longer introns also needs --run-star/--run-segemehl/--run-map-transcripts.",
+    "longer intron (sl_cut) and combinr enforces it, and Trinity genome-guided "
+    "uses it as --genome_guided_max_intron. Changing it on a resumed run re-runs "
+    "sl_cut/combinr automatically; recovering longer introns from the assembly or "
+    "mapping also needs --run-trinity/--run-map-transcripts.",
 )
 @optgroup.option("--phred", type=click.Choice(["33", "64"]), default="33", show_default=True, help="Phred quality score.")
 @optgroup.option(
-    "--jaccard-clip", "-j", is_flag=True,
-    help="Enable jaccard clipping of fused transcripts (both rnaSPAdes contigs and "
-    "the StringTie GTF), splitting two adjacent loci joined into one model. "
-    "Needs paired reads; tune via the --jaccard-* knobs below.",
+    "--jaccard-clip/--no-jaccard-clip", "-j", default=None,
+    help="In-house jaccard clipping of fused Trinity transcripts (both de novo and "
+    "genome-guided), splitting two adjacent loci joined into one contig. On by "
+    "default; needs paired reads. --no-jaccard-clip disables; tune via the "
+    "--jaccard-* knobs below.",
 )
 @optgroup.option(
     "--jaccard-greediness", type=float, default=None,
@@ -101,16 +103,6 @@ from eukan.cli._framework import (
     help="Ceiling on the coverage-adaptive trough gate (default 0.30): caps how far "
     "--jaccard-greediness can relax --jaccard-max-trough in low coverage. LOWER to "
     "keep low-coverage clipping stringent. Only used with -j.",
-)
-@optgroup.option(
-    "--rnaspades/--no-rnaspades", default=True, show_default=True,
-    help="Run rnaSPAdes de novo assembly (the de novo source; consolidated by combinr).",
-)
-@optgroup.option(
-    "--stringtie-min-junction", type=float, default=None,
-    help="StringTie -j: minimum spliced reads spanning a junction to keep it "
-    "(default 1). Raise it to drop single-read spurious junctions that inflate "
-    "isoforms / fuse neighbouring loci in noisy, dense, or trans-spliced genomes.",
 )
 @optgroup.option(
     "--combinr-stringent-overlap", type=float, default=None,
@@ -154,14 +146,16 @@ from eukan.cli._framework import (
 )
 @optgroup.option(
     "--memory-gb", type=int, default=None,
-    help="rnaSPAdes -m memory cap in GiB. Defaults to 60 percent of "
-         "currently-available memory (floored at 4 GiB).",
+    help="Assembly memory cap in GiB (Trinity --max_memory / rnaSPAdes -m). "
+         "Defaults to 60 percent of currently-available memory (floored at 4 GiB).",
 )
 @optgroup.group("Re-run steps")
 @optgroup.option("--run-star", "-A", is_flag=True, help="Force re-run STAR read mapping.")
 @optgroup.option("--run-segemehl", is_flag=True, help="Force re-run segemehl read mapping.")
-@optgroup.option("--run-stringtie", is_flag=True, help="Force re-run StringTie genome-guided assembly.")
-@optgroup.option("--run-rnaspades", is_flag=True, help="Force re-run rnaSPAdes assembly.")
+@optgroup.option(
+    "--run-trinity", "-T", is_flag=True,
+    help="Force re-run Trinity de novo + genome-guided assembly.",
+)
 @optgroup.option(
     "--run-jaccard", is_flag=True,
     help="Force re-run jaccard clipping of fused transcripts.",
@@ -205,8 +199,7 @@ def assemble(
     align_mode: str,
     run_star: bool,
     run_segemehl: bool,
-    run_stringtie: bool,
-    run_rnaspades: bool,
+    run_trinity: bool,
     run_jaccard: bool,
     run_map_transcripts: bool,
     run_strand_correct: bool,
@@ -214,13 +207,11 @@ def assemble(
     run_sl_detect: bool,
     run_sl_cut: bool,
     run_combinr: bool,
-    jaccard_clip: bool,
+    jaccard_clip: bool | None,
     jaccard_greediness: float | None,
     jaccard_max_trough: float | None,
     jaccard_min_delta: float | None,
     jaccard_max_adaptive_trough: float | None,
-    rnaspades: bool,
-    stringtie_min_junction: float | None,
     combinr_stringent_overlap: float | None,
     defuse: bool,
     defuse_overlap_tolerance: float | None,
@@ -282,8 +273,6 @@ def assemble(
         jaccard_max_trough=jaccard_max_trough,
         jaccard_min_delta=jaccard_min_delta,
         jaccard_max_adaptive_trough=jaccard_max_adaptive_trough,
-        rnaspades=rnaspades,
-        stringtie_min_junction_coverage=stringtie_min_junction,
         combinr_stringent_overlap=combinr_stringent_overlap,
         defuse=defuse,
         defuse_overlap_tolerance=defuse_overlap_tolerance,
@@ -304,8 +293,7 @@ def assemble(
     force_steps = force_steps_from_run_flags(
         aligner=aligner,
         run_star=run_star, run_segemehl=run_segemehl,
-        run_stringtie=run_stringtie,
-        run_rnaspades=run_rnaspades, run_jaccard=run_jaccard,
+        run_trinity=run_trinity, run_jaccard=run_jaccard,
         run_map_transcripts=run_map_transcripts,
         run_strand_correct=run_strand_correct, run_defuse=run_defuse,
         run_sl_detect=run_sl_detect, run_sl_cut=run_sl_cut,

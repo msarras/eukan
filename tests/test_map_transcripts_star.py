@@ -38,20 +38,22 @@ def _map_cmds(cmds):
     return [c for c in cmds if c and c[0] in ("STAR", "STARlong") and "--readFilesIn" in c]
 
 
-def test_maps_de_novo_assembly(tmp_path, monkeypatch):
-    (tmp_path / "rnaspades.fasta").write_text(">t\nACGTACGT\n")
+def test_maps_both_trinity_tracks(tmp_path, monkeypatch):
+    (tmp_path / "trinity-denovo.fasta").write_text(">t\nACGTACGT\n")
+    (tmp_path / "trinity-gg.fasta").write_text(">t\nACGTACGT\n")
     cmds = _mock(monkeypatch, tmp_path)
 
     star.map_transcripts_star(_config(tmp_path))
 
     assert sum(1 for c in cmds if "genomeGenerate" in c) == 1  # one genome index
     queries = {Path(c[c.index("--readFilesIn") + 1]).name for c in _map_cmds(cmds)}
-    assert queries == {"rnaspades.fasta"}
-    assert (tmp_path / "rnaspades.genome.bam").exists()
+    assert queries == {"trinity-denovo.fasta", "trinity-gg.fasta"}
+    assert (tmp_path / "trinity-denovo.genome.bam").exists()
+    assert (tmp_path / "trinity-gg.genome.bam").exists()
 
 
 def test_starlong_flags_spliced_local(tmp_path, monkeypatch):
-    (tmp_path / "rnaspades.fasta").write_text(">t\nACGTACGT\n")
+    (tmp_path / "trinity-denovo.fasta").write_text(">t\nACGTACGT\n")
     cmds = _mock(monkeypatch, tmp_path)
 
     star.map_transcripts_star(_config(tmp_path, max_intron_len=5000))
@@ -61,23 +63,23 @@ def test_starlong_flags_spliced_local(tmp_path, monkeypatch):
     assert cmd[cmd.index("--alignEndsType") + 1] == "Local"     # soft-clip the SL
     assert cmd[cmd.index("--alignIntronMax") + 1] == "5000"     # spliced, bounded intron
     assert cmd[cmd.index("--outReadsUnmapped") + 1] == "Fastx"
-    assert ["samtools", "index", "rnaspades.genome.bam"] in cmds
+    assert ["samtools", "index", "trinity-denovo.genome.bam"] in cmds
 
 
 def test_prefers_jaccard_clipped_query(tmp_path, monkeypatch):
-    (tmp_path / "rnaspades.fasta").write_text(">t\nACGT\n")
-    (tmp_path / "rnaspades.jaccard.fasta").write_text(">t\nACGTACGT\n")
+    (tmp_path / "trinity-denovo.fasta").write_text(">t\nACGT\n")
+    (tmp_path / "trinity-denovo.jaccard.fasta").write_text(">t\nACGTACGT\n")
     cmds = _mock(monkeypatch, tmp_path)
 
     star.map_transcripts_star(_config(tmp_path))
 
     (cmd,) = _map_cmds(cmds)
-    assert Path(cmd[cmd.index("--readFilesIn") + 1]).name == "rnaspades.jaccard.fasta"
-    assert (tmp_path / "rnaspades.genome.bam").exists()  # output keyed to the stem
+    assert Path(cmd[cmd.index("--readFilesIn") + 1]).name == "trinity-denovo.jaccard.fasta"
+    assert (tmp_path / "trinity-denovo.genome.bam").exists()  # output keyed to the stem
 
 
 def test_unmapped_captured(tmp_path, monkeypatch):
-    (tmp_path / "rnaspades.fasta").write_text(">t\nACGT\n")
+    (tmp_path / "trinity-denovo.fasta").write_text(">t\nACGT\n")
 
     def fake(cmd, **kw):
         if cmd[0] in ("STAR", "STARlong") and "--outFileNamePrefix" in cmd:
@@ -89,12 +91,12 @@ def test_unmapped_captured(tmp_path, monkeypatch):
     monkeypatch.setattr(star, "_count_mapped", lambda _p: 1)
     star.map_transcripts_star(_config(tmp_path))
 
-    assert (tmp_path / "rnaspades.unmapped_transcripts.fasta").exists()
+    assert (tmp_path / "trinity-denovo.unmapped_transcripts.fasta").exists()
 
 
 def test_segemehl_fallback_on_zero_map(tmp_path, monkeypatch):
     """STARlong mapping nothing falls back to segemehl -S for that transcript set."""
-    (tmp_path / "rnaspades.fasta").write_text(">t\nACGTACGT\n")
+    (tmp_path / "trinity-denovo.fasta").write_text(">t\nACGTACGT\n")
     _mock(monkeypatch, tmp_path, mapped=0)
 
     called: list[str] = []
@@ -105,7 +107,7 @@ def test_segemehl_fallback_on_zero_map(tmp_path, monkeypatch):
 
     star.map_transcripts_star(_config(tmp_path))
 
-    assert called == ["rnaspades.genome.bam"]
+    assert called == ["trinity-denovo.genome.bam"]
 
 
 def test_no_assemblies_is_noop(tmp_path, monkeypatch):
@@ -210,25 +212,29 @@ class TestSegemehlPrimaryPath:
     """The segemehl-primary transcript path maps each set, no STAR index built."""
 
     def test_maps_each_set(self, tmp_path, monkeypatch):
-        (tmp_path / "rnaspades.fasta").write_text(">t\nACGTACGT\n")
+        (tmp_path / "trinity-denovo.fasta").write_text(">t\nACGTACGT\n")
+        (tmp_path / "trinity-gg.fasta").write_text(">t\nACGTACGT\n")
         called: list[tuple[str, str]] = []
         monkeypatch.setattr(
             segemehl, "map_one_transcript_set_segemehl",
             lambda config, query, out_bam: called.append((query.name, out_bam)),
         )
         star._map_transcripts_segemehl(_config(tmp_path))
-        assert called == [("rnaspades.fasta", "rnaspades.genome.bam")]
+        assert called == [
+            ("trinity-denovo.fasta", "trinity-denovo.genome.bam"),
+            ("trinity-gg.fasta", "trinity-gg.genome.bam"),
+        ]
 
     def test_prefers_jaccard_clipped_query(self, tmp_path, monkeypatch):
-        (tmp_path / "rnaspades.fasta").write_text(">t\nACGT\n")
-        (tmp_path / "rnaspades.jaccard.fasta").write_text(">t\nACGTACGT\n")
+        (tmp_path / "trinity-denovo.fasta").write_text(">t\nACGT\n")
+        (tmp_path / "trinity-denovo.jaccard.fasta").write_text(">t\nACGTACGT\n")
         called: list[str] = []
         monkeypatch.setattr(
             segemehl, "map_one_transcript_set_segemehl",
             lambda config, query, out_bam: called.append(query.name),
         )
         star._map_transcripts_segemehl(_config(tmp_path))
-        assert called == ["rnaspades.jaccard.fasta"]
+        assert called == ["trinity-denovo.jaccard.fasta"]
 
     def test_noop_without_transcripts(self, tmp_path, monkeypatch):
         called: list[int] = []

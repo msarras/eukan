@@ -154,32 +154,38 @@ def test_segemehl_sj_feeds_intron_hints(tmp_path):
 def test_steps_for_selects_aligner():
     star = _steps_for("star")
     seg = _steps_for("segemehl")
+    # Trinity (both de novo + genome-guided) replaces the old rnaspades +
+    # stringtie steps; both Trinity FASTAs are jaccard-clipped then mapped.
     assert [s.name for s in star] == [
-        "star", "stringtie", "rnaspades", "jaccard",
+        "star", "trinity", "jaccard",
         "map_transcripts", "strand_correct", "defuse", "sl_detect", "sl_cut", "combinr",
     ]
     assert [s.name for s in seg] == [
-        "segemehl", "stringtie", "rnaspades", "jaccard",
+        "segemehl", "trinity", "jaccard",
         "map_transcripts", "strand_correct", "defuse", "sl_detect", "sl_cut", "combinr",
     ]
     assert seg[0].output == "segemehl_Aligned.sortedByCoord.out.bam"
 
 
 def test_force_steps_respects_active_aligner():
-    # --run-<aligner> cascades to the genome-guided consumers of the read BAM,
-    # but the active aligner's name is the one in the returned chain.
+    # --run-<aligner> cascades to the consumers of the read BAM (Trinity reads it
+    # for genome-guided assembly; sl_detect reads it for SL detection), so the
+    # transitive closure pulls in the whole Trinity track chain; the active
+    # aligner's name is the one in the returned chain.
     assert force_steps_from_run_flags(aligner="star", run_star=True) == [
-        "assembly/star", "assembly/stringtie", "assembly/strand_correct",
-        "assembly/defuse", "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
+        "assembly/star", "assembly/trinity", "assembly/jaccard",
+        "assembly/map_transcripts", "assembly/strand_correct", "assembly/defuse",
+        "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
     ]
     assert force_steps_from_run_flags(aligner="segemehl", run_segemehl=True) == [
-        "assembly/segemehl", "assembly/stringtie", "assembly/strand_correct",
-        "assembly/defuse", "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
+        "assembly/segemehl", "assembly/trinity", "assembly/jaccard",
+        "assembly/map_transcripts", "assembly/strand_correct", "assembly/defuse",
+        "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
     ]
     # --force re-runs the active aligner's whole chain.
     assert force_steps_from_run_flags(aligner="segemehl", force=True) == [
-        "assembly/segemehl", "assembly/stringtie",
-        "assembly/rnaspades", "assembly/jaccard", "assembly/map_transcripts",
+        "assembly/segemehl", "assembly/trinity",
+        "assembly/jaccard", "assembly/map_transcripts",
         "assembly/strand_correct", "assembly/defuse", "assembly/sl_detect",
         "assembly/sl_cut", "assembly/combinr",
     ]

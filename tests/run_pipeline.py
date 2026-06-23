@@ -9,8 +9,8 @@ Usage:
 Full pipeline order:
     1. Database fetch (UniProt or KOfam, plus Pfam — see --homology-db)
     2. Repeat masking (RepeatModeler + RepeatMasker)
-    3. Transcriptome assembly (STAR + Trinity + PASA)
-    4. Genome annotation (GeneMark + spaln + AUGUSTUS + SNAP + EVM)
+    3. Transcriptome assembly (STAR + Trinity de novo/genome-guided + combinr)
+    4. Genome annotation (GeneMark + spaln + AUGUSTUS + SNAP + combinr)
     5. Functional annotation (homology + Pfam hmmscan on predicted proteins)
     6. NCBI submission prep (table2asn validation + .sqn)
 
@@ -151,8 +151,8 @@ def test_pipeline_cmd(
     Runs all steps of the annotation workflow via the eukan CLI:
       1. eukan db-fetch        Download Pfam + the chosen --homology-db
       2. eukan mask-repeats    RepeatModeler + RepeatMasker (soft-mask)
-      3. eukan assemble        STAR mapping + Trinity + PASA
-      4. eukan annotate        GeneMark + spaln + AUGUSTUS + SNAP + EVM
+      3. eukan assemble        STAR mapping + Trinity (de novo/genome-guided) + combinr
+      4. eukan annotate        GeneMark + spaln + AUGUSTUS + SNAP + combinr
       5. eukan func-annot      Homology + Pfam hmmscan on predicted proteins
       6. eukan prep-submission table2asn validation + .sqn
 

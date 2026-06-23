@@ -67,12 +67,12 @@ def test_parse_hits(tmp_path):
     p = tmp_path / "hits.tsv"
     p.write_text(
         "# comment\n"
-        "st:T1\tsp|P1\t120.5\t2\n"   # best for T1 (forward frame)
-        "st:T1\tsp|P9\t90.0\t-1\n"   # lower bitscore for same query -> ignored
-        "rs:N2\tsp|P2\t77.0\t-3\n"   # reverse-frame hit
+        "trinity-gg.genome:T1\tsp|P1\t120.5\t2\n"     # best for T1 (forward frame)
+        "trinity-gg.genome:T1\tsp|P9\t90.0\t-1\n"     # lower bitscore, same query -> ignored
+        "trinity-denovo.genome:N2\tsp|P2\t77.0\t-3\n"  # reverse-frame hit
         "shortrow\n"
     )
-    assert sc.parse_hits(p) == {"st:T1": 2, "rs:N2": -3}
+    assert sc.parse_hits(p) == {"trinity-gg.genome:T1": 2, "trinity-denovo.genome:N2": -3}
 
 
 def test_coding_strand():
@@ -208,7 +208,9 @@ def _config(tmp_path, **kw):
 
 def test_run_corrects_strands(tmp_path, monkeypatch):
     (tmp_path / "db.dmnd").write_text("x")  # prebuilt .dmnd → no makedb
-    (tmp_path / "stringtie.gtf").write_text(
+    # The mapped Trinity genome track's raw GFF3 (built from the BAM in step 1);
+    # here written directly so step 3 strand-corrects it into *.stranded.gff3.
+    (tmp_path / "trinity-gg.genome.gff3").write_text(
         _gtf_tx("chrA", "T_confirmed_plus", "+", [(1, 40), (51, 90)])
         + _gtf_tx("chrB", "T_wrong", "+", [(1, 40), (51, 90)])
         + _gtf_tx("chrC", "T_dot", ".", [(1, 40), (51, 90)])
@@ -220,8 +222,8 @@ def test_run_corrects_strands(tmp_path, monkeypatch):
         if "blastx" in cmd:
             out = cmd[cmd.index("--out") + 1]
             Path(out).write_text(
-                "st:T_confirmed_plus\tsp|P1\t150.0\t1\n"   # forward frame -> '+'
-                "st:T_antisense\tsp|P2\t140.0\t-1\n"        # reverse frame on '-' -> flip '+'
+                "trinity-gg.genome:T_confirmed_plus\tsp|P1\t150.0\t1\n"  # forward frame -> '+'
+                "trinity-gg.genome:T_antisense\tsp|P2\t140.0\t-1\n"      # reverse on '-' -> flip '+'
             )
 
     monkeypatch.setattr(sc, "run_cmd", fake_run_cmd)
@@ -229,7 +231,7 @@ def test_run_corrects_strands(tmp_path, monkeypatch):
     config = _config(tmp_path, uniprot_db=tmp_path / "db.dmnd", min_strand_consensus=1)
     sc.run_strand_correction(config)
 
-    out = tmp_path / "stringtie.stranded.gff3"
+    out = tmp_path / "trinity-gg.genome.stranded.gff3"
     assert out.exists()
     strands = {m.tid: m.strand for m in _parse_transcript_models(out)}
     assert strands == {
@@ -249,9 +251,10 @@ def test_run_corrects_strands(tmp_path, monkeypatch):
 
 
 def test_run_converts_denovo_bam_then_gates_on_no_uniprot(tmp_path, monkeypatch):
-    """Even when disabled, the de novo BAM is converted to GFF3 for the SL cut."""
+    """Even when disabled, each Trinity transcript->genome BAM is converted to GFF3
+    for the SL cut."""
     _make_bam(
-        tmp_path / "rnaspades.genome.bam",
+        tmp_path / "trinity-denovo.genome.bam",
         [("q1", 0, 100, [(0, 10), (3, 50), (0, 10)], "A" * 20)],
     )
     called: list[list[str]] = []
@@ -260,34 +263,37 @@ def test_run_converts_denovo_bam_then_gates_on_no_uniprot(tmp_path, monkeypatch)
     config = _config(tmp_path, uniprot_db=None)  # disabled
     sc.run_strand_correction(config)
 
-    assert (tmp_path / "rnaspades.genome.gff3").exists()        # always produced
-    assert not (tmp_path / "stringtie.stranded.gff3").exists()  # gated off
-    assert not any("blastx" in c for c in called)               # diamond not run
+    assert (tmp_path / "trinity-denovo.genome.gff3").exists()         # always produced
+    assert not (tmp_path / "trinity-gg.genome.stranded.gff3").exists()  # gated off
+    assert not (tmp_path / "trinity-denovo.genome.stranded.gff3").exists()
+    assert not any("blastx" in c for c in called)                    # diamond not run
 
 
 def test_run_clears_stale_stranded_on_noop(tmp_path, monkeypatch):
-    """A no-op run removes prior *.stranded.gff3 so sl_cut falls back to the fresh
-    jaccard-clipped StringTie GFF3 instead of a stale stranded file from a run that
-    had --uniprot."""
+    """A no-op run removes prior *.stranded.gff3 for BOTH Trinity tracks so sl_cut
+    falls back to the fresh raw genome GFF3 instead of a stale stranded file from a
+    run that had --uniprot."""
     monkeypatch.setattr(sc, "run_cmd", lambda cmd, **kw: None)
-    (tmp_path / "stringtie.stranded.gff3").write_text("##gff-version 3\n")
-    (tmp_path / "rnaspades.genome.stranded.gff3").write_text("##gff-version 3\n")
+    (tmp_path / "trinity-gg.genome.stranded.gff3").write_text("##gff-version 3\n")
+    (tmp_path / "trinity-denovo.genome.stranded.gff3").write_text("##gff-version 3\n")
 
     config = _config(tmp_path, uniprot_db=None)  # correction now disabled
     sc.run_strand_correction(config)
 
-    assert not (tmp_path / "stringtie.stranded.gff3").exists()
-    assert not (tmp_path / "rnaspades.genome.stranded.gff3").exists()
+    assert not (tmp_path / "trinity-gg.genome.stranded.gff3").exists()
+    assert not (tmp_path / "trinity-denovo.genome.stranded.gff3").exists()
 
 
 def test_run_gates_on_strand_specific(tmp_path, monkeypatch):
     (tmp_path / "db.dmnd").write_text("x")
-    (tmp_path / "stringtie.gtf").write_text(_gtf_tx("chrA", "T1", "+", [(1, 40), (51, 90)]))
+    (tmp_path / "trinity-gg.genome.gff3").write_text(
+        _gtf_tx("chrA", "T1", "+", [(1, 40), (51, 90)])
+    )
     called: list[list[str]] = []
     monkeypatch.setattr(sc, "run_cmd", lambda cmd, **kw: called.append(cmd))
 
     config = _config(tmp_path, uniprot_db=tmp_path / "db.dmnd", strand_specific="RF")
     sc.run_strand_correction(config)
 
-    assert not (tmp_path / "stringtie.stranded.gff3").exists()
+    assert not (tmp_path / "trinity-gg.genome.stranded.gff3").exists()
     assert not any("blastx" in c for c in called)

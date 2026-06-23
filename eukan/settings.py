@@ -318,7 +318,12 @@ class AssemblyConfig(_StepRunSettings):
     strand_specific: str | None = None
     aligner: Literal["auto", "star", "segemehl"] = "auto"
     align_mode: str = "Local"
-    jaccard_clip: bool = False
+    jaccard_clip: bool = True
+    """Run the in-house jaccard clipping step over the Trinity transcript FASTAs
+    (both de novo and genome-guided), splitting two adjacent loci fused into one
+    contig. On by default; a no-op on single-end reads (read-pair bridging is the
+    clip signal). This replaces Trinity's own ``--jaccard_clip`` (the standalone
+    step is faster — STAR, not bowtie2 — and tunable via the ``jaccard_*`` knobs)."""
     jaccard_greediness: float = 1.5
     """Coverage-adaptive slack for jaccard fusion-trough detection. At low read-pair
     depth the pseudocount keeps a real fusion junction's jaccard above the fixed
@@ -346,6 +351,9 @@ class AssemblyConfig(_StepRunSettings):
     diagnose_softclips: bool = True
 
     # --- Genome-guided assembly (StringTie) stringency ---
+    # DORMANT: StringTie is no longer in the active pipeline (Trinity covers both
+    # de novo and genome-guided). These fields configure the kept-but-unwired
+    # stringtie module and have no effect unless it is re-wired into _steps_for.
     stringtie_min_coverage: float = 1.5
     """StringTie ``-c``: minimum per-bp read coverage for a transcript to be
     assembled. Raised above StringTie's default of 1 to suppress low-coverage
@@ -363,7 +371,9 @@ class AssemblyConfig(_StepRunSettings):
 
     # --- de novo + combinr consolidation routine (replaces PASA) ---
     rnaspades: bool = True
-    """Run rnaSPAdes de novo assembly (the de novo source; consolidated via combinr)."""
+    """DORMANT: rnaSPAdes is no longer in the active pipeline (Trinity covers de
+    novo + genome-guided). Configures the kept-but-unwired rnaspades module; no
+    effect unless it is re-wired into _steps_for."""
     min_sl_fragment: int = 25
     """Minimum length (nt) of a fragment kept after in-silico SL trans-splicing."""
     sl_sequence: str | None = None
@@ -448,9 +458,18 @@ class AssemblyConfig(_StepRunSettings):
             return ["-q", str(self.single_reads)]
         raise ValueError("No read files provided")
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def reads_args_trinity(self) -> list[str]:
+        if self.left_reads and self.right_reads:
+            return ["--left", str(self.left_reads), "--right", str(self.right_reads)]
+        elif self.single_reads:
+            return ["--single", str(self.single_reads)]
+        raise ValueError("No read files provided")
+
     memory_gb: int = Field(
         default_factory=lambda: _default_assembly_memory_gb(),
-        description="rnaSPAdes -m memory cap in GiB.",
+        description="Assembly memory cap in GiB (Trinity --max_memory / rnaSPAdes -m).",
     )
 
     settings_customise_sources = _pyproject_settings_sources("assemble")

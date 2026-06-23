@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Eukan is a eukaryotic genome annotation pipeline that integrates ab initio gene prediction (GeneMark, AUGUSTUS, SNAP, CodingQuarry) with homology-based evidence (protein alignments via spaln/gth) and transcript assemblies to produce consensus gene models via EVidenceModeler (EVM). It optionally adds UTRs via PASA and functional annotation via phmmer-against-UniProt or hmmscan-against-KOfam (adapted from KofamKOALA), plus hmmscan-against-Pfam.
+Eukan is a eukaryotic genome annotation pipeline that integrates ab initio gene prediction (GeneMark, AUGUSTUS, SNAP, CodingQuarry) with homology-based evidence (protein alignments via spaln/gth) and transcript assemblies to produce consensus gene models via the external `combinr consensus` engine, which folds in UTRs and alternative isoforms from the transcript evidence. It optionally adds functional annotation via phmmer-against-UniProt or hmmscan-against-KOfam (adapted from KofamKOALA), plus hmmscan-against-Pfam.
 
 ## Build and Run
 
@@ -102,16 +102,29 @@ eukan/
 │   ├── augustus.py     # AUGUSTUS training and prediction
 │   ├── training.py     # Training-set construction shared across predictors
 │   ├── snap.py         # SNAP and CodingQuarry gene prediction
-│   ├── evm.py          # EVidenceModeler consensus building (default engine)
-│   ├── combinr_consensus.py # Alt. consensus engine: external `combinr consensus` (EVM + PASA UTRs in one)
-│   └── consensus.py    # Final model building: EVM-or-combinr dispatch + prettification
+│   ├── evidence.py     # Evidence-source role mapping + weights helpers (extracted from the old EVM driver)
+│   ├── combinr_consensus.py # Consensus engine: external `combinr consensus` (weighted DP; folds in UTRs + alt isoforms)
+│   └── consensus.py    # Final model building: combinr consensus + ORF patch + prettification
 │
 ├── assembly/           # Transcriptome assembly pipeline
-│   ├── pipeline.py     # run_assembly() dispatch (StepSpec-driven)
-│   ├── star.py         # STAR read mapping, splice site profiling, hint generation
+│   ├── pipeline.py     # run_assembly() dispatch (StepSpec-driven); _DOWNSTREAM cascade
+│   ├── star.py         # STAR read mapping + STARlong spliced transcript→genome mapping (map_transcripts)
+│   ├── segemehl.py     # segemehl read/transcript mapping (fallback + non-canonical primary); _TRANSCRIPT_SETS
+│   ├── align_hints.py  # RNA-seq intron/coverage hint emission from the read BAM
 │   ├── bam_diagnostic.py # Post-STAR soft-clip + intron BAM walk → trans-splicing / non-canonical-splice verdict
-│   ├── trinity.py      # Trinity genome-guided and de novo assembly
-│   └── pasa.py         # PASA spliced alignment and transcript hints
+│   ├── bam_introns.py  # Max-intron-bounded BAM filtering primitive
+│   ├── trinity.py      # Trinity genome-guided + de novo assembly (the active assembler, both modes)
+│   ├── tracks.py       # Single source of truth for the mapped Trinity track stems + per-track filenames
+│   ├── jaccard.py      # In-house jaccard fusion-clip (replaces Trinity --jaccard_clip; STAR-based, tunable)
+│   ├── strand_correction.py # Homology-calibrated per-transcript splice-strand flip (diamond blastx, opt-in --uniprot)
+│   ├── defuse.py       # Homology-grounded chimera splitting (opt-in --defuse + --uniprot)
+│   ├── sl_acceptors.py # Spliced-leader trans-splice acceptor detection (read-side + de novo)
+│   ├── sl_cut.py       # Genomic SL cut + max-intron split of transcript models
+│   ├── polya.py        # Poly-A characterization + unmapped de-novo transcript output
+│   ├── combinr.py      # combinr-assemble consolidation → nr_transcripts.{fasta,gff3} + hints_rnaseq.gff
+│   ├── rnaspades.py    # DORMANT: rnaSPAdes de novo (kept, unwired — Trinity replaced it)
+│   ├── stringtie.py    # DORMANT: StringTie genome-guided (kept, unwired — Trinity replaced it)
+│   └── sl_depletion.py # SL-motif primitives (FASTA depletion path retired for the genomic SL cut)
 │
 ├── repeats/            # Repeat masking pipeline
 │   ├── pipeline.py     # run_repeats() (StepSpec-driven)
@@ -135,7 +148,7 @@ eukan/
 │
 └── data/               # Static data shipped with the package
     ├── tools.toml      # External-tool registry (versions, probe commands, env hints)
-    └── configs/        # AUGUSTUS / EVM / PASA config templates
+    └── configs/        # AUGUSTUS config template (+ unused legacy PASA templates)
 ```
 
 ### Pipeline Flow
@@ -147,13 +160,10 @@ eukan/
    - `--spsp`: species-specific parameters via `make_eij.pl`/`make_ssp.pl` → spaln `-T` (experimental, uses separate `prot_align_ssp/` step dir)
 4. AUGUSTUS training and prediction using protein + RNA-seq hints — auto-allows non-canonical splice sites from STAR evidence (`splice_site_summary.json`); `--splice-permissive` lowers thresholds
 5. SNAP training and prediction (fungus/protist also runs CodingQuarry)
-6. Consensus model building, weighted by evidence type, via one of two engines (`--consensus-engine`):
-   - `evm` (default): EVidenceModeler, optionally followed by UTR addition via PASA (`--utrs`)
-   - `combinr`: external `combinr consensus` (EVM-style weighted DP), genetic-code aware, which folds UTRs and alternative isoforms in from transcript evidence (`--alt-splice`) — replacing the separate PASA UTR step. Protein (`prot.gff3`, CDS-format) and transcript (`nr_transcripts.gff3`, flat exon) evidence are converted to `Target=` match chains; ab initio predictions and the weights file are reused as-is. Binary resolved via `--combinr-path` or PATH.
-7. (EVM engine only) Optional UTR addition via PASA
-8. Final GFF3 formatting with locus tags
-9. Optional functional annotation via `func-annot` (UniProt-or-KOfam plus Pfam, selected by `--homology-db`) → `final.mod.gff3`. KOfam mode is an adaptation of KofamKOALA: per-KO bit-score thresholds from `ko_list`, full vs domain score selection per KO, EC numbers parsed out of `[EC:…]` tags into a dedicated `ec_number=` GFF3 attribute, KEGG accessions emitted as `Dbxref=KEGG:K…`
-10. Optional `prep-submission` runs NCBI's table2asn validator over `final.mod.gff3` to produce a `.sqn` plus `.val/.dr/.stats` reports for iterative GFF3 refinement
+6. Consensus model building, weighted by evidence type, via the external `combinr consensus` engine (EVM-style weighted DP), genetic-code aware, which folds UTRs and alternative isoforms in from transcript evidence — covering what EVM plus the separate PASA UTR step used to do together. Protein (`prot.gff3`, CDS-format) and transcript (`nr_transcripts.gff3`, flat exon) evidence are converted to `Target=` match chains; ab initio predictions and the weights file are reused as-is. Isoform-grouping stringency is tunable via `--combinr-stringent-overlap`; the binary is resolved via `--combinr-path` or PATH.
+7. Final GFF3 formatting with locus tags
+8. Optional functional annotation via `func-annot` (UniProt-or-KOfam plus Pfam, selected by `--homology-db`) → `final.mod.gff3`. KOfam mode is an adaptation of KofamKOALA: per-KO bit-score thresholds from `ko_list`, full vs domain score selection per KO, EC numbers parsed out of `[EC:…]` tags into a dedicated `ec_number=` GFF3 attribute, KEGG accessions emitted as `Dbxref=KEGG:K…`
+9. Optional `prep-submission` runs NCBI's table2asn validator over `final.mod.gff3` to produce a `.sqn` plus `.val/.dr/.stats` reports for iterative GFF3 refinement
 
 ### Per-step Run Directory Layout
 

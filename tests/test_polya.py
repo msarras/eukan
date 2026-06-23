@@ -192,7 +192,7 @@ def test_write_unmapped_fasta_extracts_only_unmapped(tmp_path):
              reference_id=-1, reference_start=-1, cigartuples=None),
     ]
     _write_bam(bam, [("c1", 100)], reads)
-    out = tmp_path / "rnaspades.unmapped_transcripts.fasta"
+    out = tmp_path / "trinity-denovo.unmapped_transcripts.fasta"
     n = _write_unmapped_fasta(bam, out)
     assert n == 1
     text = out.read_text()
@@ -218,12 +218,12 @@ def test_map_one_transcript_set_segemehl_captures_unmapped(tmp_path, monkeypatch
     monkeypatch.setattr(seg, "_coordinate_sort_and_filter", lambda *a, **k: None)
 
     (tmp_path / "genome.fa").write_text(">c1\n" + "ACGT" * 100 + "\n")
-    query = tmp_path / "rnaspades.fasta"
+    query = tmp_path / "trinity-denovo.fasta"
     query.write_text(">tx_M\nACGT\n>tx_U\nGGGG\n")
     config = AssemblyConfig(genome=tmp_path / "genome.fa", work_dir=tmp_path, num_cpu=1)
-    seg.map_one_transcript_set_segemehl(config, query, "rnaspades.genome.bam")
+    seg.map_one_transcript_set_segemehl(config, query, "trinity-denovo.genome.bam")
 
-    fa = tmp_path / "rnaspades.unmapped_transcripts.fasta"
+    fa = tmp_path / "trinity-denovo.unmapped_transcripts.fasta"
     assert fa.exists()
     text = fa.read_text()
     assert ">tx_U" in text and "GGGGCCCCAAAATTTT" in text
@@ -274,8 +274,8 @@ def test_run_softclip_diagnostic_backfills_reads_section_on_resume(tmp_path):
 
 def _finalize_setup(tmp_path):
     (tmp_path / "genome.fa").write_text(">c1\n" + "ACGT" * 200 + "\n")
-    (tmp_path / "rnaspades.fasta").write_text(">t1\n" + "ACGT" * 50 + "\n")
-    _write_bam(tmp_path / "rnaspades.genome.bam", [("c1", 800)], [
+    (tmp_path / "trinity-denovo.fasta").write_text(">t1\n" + "ACGT" * 50 + "\n")
+    _write_bam(tmp_path / "trinity-denovo.genome.bam", [("c1", 800)], [
         dict(query_name="t1", query_sequence="C" * 10 + "A" * 20, flag=0,
              reference_id=0, reference_start=5, cigartuples=[(0, 10), (4, 20)]),
     ])
@@ -285,7 +285,7 @@ def test_finalize_transcript_diagnostics_writes_sections(tmp_path):
     from eukan.assembly.star import _finalize_transcript_diagnostics
 
     _finalize_setup(tmp_path)
-    (tmp_path / "rnaspades.unmapped_transcripts.fasta").write_text(
+    (tmp_path / "trinity-denovo.unmapped_transcripts.fasta").write_text(
         ">u1\n" + "ACGT" * 20 + "A" * 16 + "\n"
     )
     config = AssemblyConfig(genome=tmp_path / "genome.fa", work_dir=tmp_path, num_cpu=1)
@@ -300,7 +300,7 @@ def test_finalize_transcript_diagnostics_respects_diagnose_off(tmp_path):
     from eukan.assembly.star import _finalize_transcript_diagnostics
 
     _finalize_setup(tmp_path)
-    (tmp_path / "rnaspades.unmapped_transcripts.fasta").write_text(">u1\nACGT\n")
+    (tmp_path / "trinity-denovo.unmapped_transcripts.fasta").write_text(">u1\nACGT\n")
     config = AssemblyConfig(
         genome=tmp_path / "genome.fa", work_dir=tmp_path, num_cpu=1,
         diagnose_softclips=False,

@@ -72,7 +72,7 @@ def test_bam_to_gff3_splits_at_intron(tmp_path):
     bam = tmp_path / "tx.bam"
     _make_bam(bam, [("q1", 0, 100, [(0, 10), (3, 50), (0, 10)], "A" * 20)])
     out = tmp_path / "tx.gff3"
-    assert bam_to_transcript_gff3(bam, out, "rnaspades") == 1
+    assert bam_to_transcript_gff3(bam, out, "trinity-denovo.genome") == 1
     (m,) = _parse_transcript_models(out)
     assert m.exons == [(101, 110), (161, 170)]
     assert m.strand == "+"
@@ -82,7 +82,7 @@ def test_bam_to_gff3_minus_strand(tmp_path):
     bam = tmp_path / "tx.bam"
     _make_bam(bam, [("q1", 16, 100, [(0, 10), (3, 50), (0, 10)], "A" * 20)])
     out = tmp_path / "tx.gff3"
-    bam_to_transcript_gff3(bam, out, "rnaspades")
+    bam_to_transcript_gff3(bam, out, "trinity-denovo.genome")
     (m,) = _parse_transcript_models(out)
     assert m.strand == "-" and m.exons == [(101, 110), (161, 170)]
 
@@ -94,7 +94,7 @@ def test_bam_to_gff3_unique_ids_for_multimaps(tmp_path):
         ("q1", 256, 500, [(0, 20)], "A" * 20),  # secondary: a second locus
     ])
     out = tmp_path / "tx.gff3"
-    assert bam_to_transcript_gff3(bam, out, "rnaspades") == 2
+    assert bam_to_transcript_gff3(bam, out, "trinity-gg.genome") == 2
     ids = {m.tid for m in _parse_transcript_models(out)}
     assert ids == {"q1.m1", "q1.m2"}  # no Parent collision → loci stay distinct
 
@@ -253,25 +253,66 @@ def test_count_long_introns():
     assert _count_long_introns(tx2, 5000) == 0
 
 
-def test_run_sl_cut_prefers_jaccard_stringtie_gff3(tmp_path):
-    # When the jaccard step produced stringtie.jaccard.gff3 (the de-fused StringTie
-    # models), run_sl_cut must read it instead of the raw stringtie.gtf.
-    (tmp_path / "stringtie.gtf").write_text(
-        'chr1\tStringTie\texon\t1\t100\t.\t+\t.\ttranscript_id "FUSED";\n'
-    )
-    (tmp_path / "stringtie.jaccard.gff3").write_text(
+def _track_models_gff3(tag):
+    """Two-model gene>mRNA>exon GFF3 whose source column encodes the variant *tag*."""
+    return (
         "##gff-version 3\n"
-        "chr1\tj\tgene\t1\t40\t.\t+\t.\tID=A.gene\n"
-        "chr1\tj\tmRNA\t1\t40\t.\t+\t.\tID=A;Parent=A.gene\n"
-        "chr1\tj\texon\t1\t40\t.\t+\t.\tID=A.e1;Parent=A\n"
-        "chr1\tj\tgene\t60\t100\t.\t+\t.\tID=B.gene\n"
-        "chr1\tj\tmRNA\t60\t100\t.\t+\t.\tID=B;Parent=B.gene\n"
-        "chr1\tj\texon\t60\t100\t.\t+\t.\tID=B.e1;Parent=B\n"
+        f"chr1\t{tag}\tgene\t1\t40\t.\t+\t.\tID=A.gene\n"
+        f"chr1\t{tag}\tmRNA\t1\t40\t.\t+\t.\tID=A;Parent=A.gene\n"
+        f"chr1\t{tag}\texon\t1\t40\t.\t+\t.\tID=A.e1;Parent=A\n"
+        f"chr1\t{tag}\tgene\t60\t100\t.\t+\t.\tID=B.gene\n"
+        f"chr1\t{tag}\tmRNA\t60\t100\t.\t+\t.\tID=B;Parent=B.gene\n"
+        f"chr1\t{tag}\texon\t60\t100\t.\t+\t.\tID=B.e1;Parent=B\n"
     )
+
+
+def _source_of(gff3_text):
+    """The source (column 2) of the first exon row — identifies which variant was read."""
+    for line in gff3_text.splitlines():
+        cols = line.split("\t")
+        if len(cols) >= 9 and cols[2] == "exon":
+            return cols[1]
+    return None
+
+
+def test_run_sl_cut_prefers_defuse_over_stranded_over_raw(tmp_path):
+    # The genome-native StringTie track is gone; both Trinity tracks are mapped and
+    # resolved identically. For a single track stem, run_sl_cut must pick the most-
+    # processed model variant via tracks.resolve_model_source:
+    # {stem}.defuse.gff3 > {stem}.stranded.gff3 > {stem}.gff3, and write {stem}.sl_cut.gff3.
+    denovo, gg = "trinity-denovo.genome", "trinity-gg.genome"
+
+    # De novo track: all three variants present -> defuse wins.
+    (tmp_path / f"{denovo}.gff3").write_text(_track_models_gff3("raw"))
+    (tmp_path / f"{denovo}.stranded.gff3").write_text(_track_models_gff3("stranded"))
+    (tmp_path / f"{denovo}.defuse.gff3").write_text(_track_models_gff3("defuse"))
+    # Genome-guided track: only raw + stranded present -> stranded wins (no defuse).
+    (tmp_path / f"{gg}.gff3").write_text(_track_models_gff3("raw"))
+    (tmp_path / f"{gg}.stranded.gff3").write_text(_track_models_gff3("stranded"))
+
     config = AssemblyConfig(genome=tmp_path / "g.fa", work_dir=tmp_path, num_cpu=1)
     run_sl_cut(config)  # no SL acceptors, no long introns -> passthrough
 
-    out = (tmp_path / "stringtie.sl_cut.gff3").read_text()
-    assert out.count("\tmRNA\t") == 2          # the two de-fused models, not the 1 fused
-    assert "ID=A;" in out and "ID=B;" in out
-    assert "FUSED" not in out
+    denovo_out = (tmp_path / f"{denovo}.sl_cut.gff3").read_text()
+    gg_out = (tmp_path / f"{gg}.sl_cut.gff3").read_text()
+
+    # Both models pass through unchanged (no cut) and the right variant was chosen.
+    assert _source_of(denovo_out) == "defuse"
+    assert _source_of(gg_out) == "stranded"
+    for out in (denovo_out, gg_out):
+        assert out.count("\tmRNA\t") == 2
+        assert "ID=A;" in out and "ID=B;" in out
+
+
+def test_run_sl_cut_skips_track_with_no_models(tmp_path):
+    # A Trinity mode that produced nothing leaves resolve_model_source -> None;
+    # that track is skipped and no {stem}.sl_cut.gff3 is written for it.
+    denovo, gg = "trinity-denovo.genome", "trinity-gg.genome"
+    (tmp_path / f"{denovo}.gff3").write_text(_track_models_gff3("raw"))
+    # No files for the genome-guided track at all.
+
+    config = AssemblyConfig(genome=tmp_path / "g.fa", work_dir=tmp_path, num_cpu=1)
+    run_sl_cut(config)
+
+    assert (tmp_path / f"{denovo}.sl_cut.gff3").exists()
+    assert not (tmp_path / f"{gg}.sl_cut.gff3").exists()
