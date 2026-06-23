@@ -7,6 +7,7 @@
 #   - combinr: Build combinr (cargo build --release) and put target/release/combinr on PATH, or set EUKAN_ASSEMBLE_COMBINR_PATH.
 #
 # Tools bundled with parent packages (no separate install):
+#   - jellyfish: bundled with parent package
 #   - makdbs: bundled with parent package
 #   - BuildDatabase: bundled with parent package
 #   - gff2gbSmallDNA.pl: bundled with parent package
@@ -53,6 +54,7 @@ dependencies:
   - stringtie=2.2.1=h3198e80_0
   - table2asn>=1.28
   - trf>=4.09
+  - trinity>=2.15
 
   # Build dependencies (needed to compile fitild from source)
   - gsl

@@ -93,7 +93,11 @@ conda_pin = "=2.7.11b=h43eeafb_3"
 [stringtie]
 binary = "stringtie"
 version_cmd = ["stringtie", "--version"]
-required_by = ["assemble"]
+# DORMANT: Trinity (genome-guided) replaced StringTie in the active pipeline.
+# Kept installable (conda_package retained, so it stays in environment.yml) in
+# case the unwired stringtie module is re-activated; required_by emptied so
+# `eukan check assemble` does not demand it.
+required_by = []
 conda_package = "stringtie"
 min_version = "2.2"
 # Pinned to a pre-v3 build: bioconda's 3.0.x builds (h29c0135) require
@@ -111,7 +115,11 @@ min_version = "0.3.4"
 [rnaspades]
 binary = "rnaspades.py"
 version_cmd = ["rnaspades.py", "--version"]
-required_by = ["assemble"]
+# DORMANT: Trinity (de novo) replaced rnaSPAdes in the active pipeline. Kept
+# installable (conda_package retained, so it stays in environment.yml) in case
+# the unwired rnaspades module is re-activated; required_by emptied so
+# `eukan check assemble` does not demand it.
+required_by = []
 # rnaspades.py ships in the bioconda 'spades' package.
 conda_package = "spades"
 min_version = "4.2"
@@ -119,6 +127,23 @@ min_version = "4.2"
 # the 4.3.0 build require AVX2 (x86-64-v3) and SIGILL (spades-core, signal 4)
 # on pre-Haswell CPUs. 4.2.0=haf24da9_0 is the last x86-64-v2 build.
 conda_pin = "=4.2.0=haf24da9_0"
+
+[trinity]
+binary = "Trinity"
+version_cmd = ["Trinity", "--version"]
+required_by = ["assemble"]
+conda_package = "trinity"
+min_version = "2.15"
+# TRINITY_HOME is version-specific; set by the Dockerfile ENV.
+env_vars = [{ var = "TRINITY_HOME" }]
+
+[jellyfish]
+binary = "jellyfish"
+version_cmd = ["jellyfish", "--version"]
+required_by = ["assemble"]
+# jellyfish is a Trinity dependency — Trinity's conda package pulls it in.
+# Don't pin a conda_package here to avoid conflicts with the unrelated
+# Python 'jellyfish' package on defaults channel.
 
 [spaln]
 binary = "spaln"

@@ -33,10 +33,11 @@ from eukan.settings import AssemblyConfig
 
 log = get_logger(__name__)
 
-# SL-cut transcript models from the sl_cut step (genome coordinates).
+# SL-cut transcript models from the sl_cut step (genome coordinates), one per
+# mapped Trinity track (de novo + genome-guided).
 _CUT_MODELS = (
-    "stringtie.sl_cut.gff3",
-    "rnaspades.genome.sl_cut.gff3",
+    "trinity-denovo.genome.sl_cut.gff3",
+    "trinity-gg.genome.sl_cut.gff3",
 )
 # Source token written into nr_transcripts.gff3; EVM's weights.txt picks this up
 # as the TRANSCRIPT evidence source (eukan/annotation/evidence.py::_first_source_token).

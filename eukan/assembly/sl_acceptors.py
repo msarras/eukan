@@ -57,8 +57,8 @@ _CIGAR_QUERY_CONSUMING = frozenset([_CIGAR_M, _CIGAR_INSERTION, _CIGAR_SOFT_CLIP
 _CONSENSUS_LEN = 16
 _MIN_DENOVO_SUPPORT = 3
 
-# De novo transcript→genome BAMs scanned for Source B (clips + insertions).
-_DENOVO_BAMS = ("rnaspades.genome.bam",)
+# Trinity transcript→genome BAMs scanned for Source B (clips + insertions).
+_DENOVO_BAMS = ("trinity-denovo.genome.bam", "trinity-gg.genome.bam")
 _GENOME_BAM_SUFFIX = ".genome.bam"
 
 

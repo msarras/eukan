@@ -1,7 +1,7 @@
 """Homology-calibrated splice-strand correction for unstranded assemblies.
 
 On a library mapped without ``-S/--strand-specific`` the strand is unknown.
-StringTie (and the de novo transcript->genome models) then label each transcript
+The Trinity transcript->genome models then label each transcript
 from a canonical ``GT-AG`` guess, or leave it ``.`` — wrong for organisms whose
 true splice consensus is non-canonical, and unrecoverable from the BAM alone (the
 unstranded junction set is strand-symmetric: every motif appears with its
@@ -24,14 +24,15 @@ Correction only ever rewrites the strand field
 ``-``, so a flipped strand yields correctly oriented evidence automatically.
 
 The step is a no-op unless ``--uniprot`` is supplied *and* the library is
-unstranded. It always emits ``rnaspades.genome.gff3`` (the de novo BAM converted to
-models) for the SL cut, and — when active — ``stringtie.stranded.gff3`` /
-``rnaspades.genome.stranded.gff3`` plus a ``strand_correction.tsv`` audit table.
+unstranded. It always emits ``<track>.genome.gff3`` (each Trinity transcript->genome
+BAM converted to models) for the SL cut, and — when active — a
+``<track>.genome.stranded.gff3`` per track plus a ``strand_correction.tsv`` audit
+table.
 
 Ported from the PASA-targeted ``strand_disambiguation.py`` (commit 52a8e63): the
 homology-tool-agnostic hit parsing and the ``consensus_on_strand`` / ``introns_of``
 splice-motif helpers. The per-locus *drop* is replaced by a per-transcript *flip*,
-which fits StringTie's one-strand-per-transcript output.
+which fits the one-strand-per-transcript model output.
 """
 
 from __future__ import annotations
@@ -48,9 +49,9 @@ from eukan.assembly.jaccard import (
     _parse_transcript_models,
     _Tx,
     _write_transcript_models_gff3,
-    resolve_stringtie_models,
 )
 from eukan.assembly.sl_cut import _DENOVO_BAMS, _GENOME_BAM_SUFFIX, bam_to_transcript_gff3
+from eukan.assembly.tracks import mapped_transcript_stems
 from eukan.infra.genome import ContigIndex
 from eukan.infra.logging import get_logger
 from eukan.infra.runner import run_cmd
@@ -58,9 +59,6 @@ from eukan.settings import AssemblyConfig
 
 log = get_logger(__name__)
 
-_STRINGTIE_STRANDED = "stringtie.stranded.gff3"
-_DENOVO_GFF3 = "rnaspades.genome.gff3"
-_DENOVO_STRANDED = "rnaspades.genome.stranded.gff3"
 _QUERY_FASTA = "strand_query.fasta"
 _HITS_TSV = "strand_blastx.tsv"
 _AUDIT_TSV = "strand_correction.tsv"
@@ -240,11 +238,12 @@ def _resolve_diamond_db(config: AssemblyConfig) -> str:
 
 
 def run_strand_correction(config: AssemblyConfig) -> None:
-    """Convert de novo BAMs to models and (when enabled) homology-correct strand."""
+    """Convert the Trinity transcript->genome BAMs to models and (when enabled)
+    homology-correct strand."""
     wd = config.work_dir
 
-    # 1. Always: de novo transcript->genome BAM -> gene>mRNA>exon GFF3 (the SL cut
-    #    consumes this, replacing the conversion that used to live in run_sl_cut).
+    # 1. Always: each Trinity transcript->genome BAM -> gene>mRNA>exon GFF3 (the SL
+    #    cut consumes these, replacing the conversion that used to live in run_sl_cut).
     for bam_name in _DENOVO_BAMS:
         bam = wd / bam_name
         if not bam.exists():
@@ -255,11 +254,11 @@ def run_strand_correction(config: AssemblyConfig) -> None:
 
     # Clear any stranded models from a prior run before deciding whether to rewrite
     # them. When correction is now a no-op (stranded library, no --uniprot, or a
-    # re-run that re-clipped the StringTie GTF), a stale *.stranded.gff3 would
-    # otherwise shadow the fresh resolve_stringtie_models() fallback in sl_cut and
-    # keep the de-fused models out of combinr. The active path rewrites them below.
-    for stale in (_STRINGTIE_STRANDED, _DENOVO_STRANDED):
-        (wd / stale).unlink(missing_ok=True)
+    # re-run that re-clipped a track), a stale *.stranded.gff3 would otherwise
+    # shadow the fresh resolve_model_source() fallback in sl_cut and keep the
+    # de-fused models out of combinr. The active path rewrites them below.
+    for stem in mapped_transcript_stems():
+        (wd / f"{stem}.stranded.gff3").unlink(missing_ok=True)
 
     # 2. Gate: only for unstranded libraries with a protein DB supplied.
     if config.strand_specific is not None:
@@ -272,13 +271,13 @@ def run_strand_correction(config: AssemblyConfig) -> None:
         log.info("No --uniprot DB; skipping homology-based strand correction.")
         return
 
-    # 3. The model sets present (StringTie models + de novo genome GFF3). Prefer the
-    #    jaccard-clipped StringTie GFF3 when the jaccard step produced it.
+    # 3. The model sets present — the raw genome GFF3 of each Trinity track (built
+    #    in step 1), correcting into a per-track ``<stem>.stranded.gff3``.
     sets: list[tuple[str, Path, Path]] = []
-    if (st := resolve_stringtie_models(wd)).exists():
-        sets.append(("st", st, wd / _STRINGTIE_STRANDED))
-    if (dn := wd / _DENOVO_GFF3).exists():
-        sets.append(("rs", dn, wd / _DENOVO_STRANDED))
+    for stem in mapped_transcript_stems():
+        raw = wd / f"{stem}.gff3"
+        if raw.exists():
+            sets.append((stem, raw, wd / f"{stem}.stranded.gff3"))
     if not sets:
         log.warning("No transcript models to strand-correct.")
         return

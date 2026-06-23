@@ -25,14 +25,14 @@ def _hit(sseqid, lo, hi, bitscore=100.0, qframe=1):
 def test_parse_positional_hits_normalizes_and_groups(tmp_path):
     tsv = tmp_path / "h.tsv"
     tsv.write_text(
-        "rs:t1\tP1\t10\t80\t120.0\t1\n"
-        "rs:t1\tP2\t300\t120\t90.0\t-2\n"  # qstart > qend (minus frame)
-        "rs:t2\tP3\t1\t50\t60.0\t1\n"
+        "trinity-denovo.genome:t1\tP1\t10\t80\t120.0\t1\n"
+        "trinity-denovo.genome:t1\tP2\t300\t120\t90.0\t-2\n"  # qstart > qend (minus frame)
+        "trinity-gg.genome:t2\tP3\t1\t50\t60.0\t1\n"
         "# comment\n"
     )
     hits = parse_positional_hits(tsv)
-    assert set(hits) == {"rs:t1", "rs:t2"}
-    a, b = hits["rs:t1"]
+    assert set(hits) == {"trinity-denovo.genome:t1", "trinity-gg.genome:t2"}
+    a, b = hits["trinity-denovo.genome:t1"]
     assert (a.sseqid, a.qlo, a.qhi, a.qframe) == ("P1", 10, 80, 1)
     assert (b.sseqid, b.qlo, b.qhi, b.qframe) == ("P2", 120, 300, -2)  # normalized
 
@@ -132,11 +132,18 @@ def _config(tmp_path, **kw):
     )
 
 
-def test_run_defuse_diamond_command_and_copy_through(tmp_path, monkeypatch):
-    (tmp_path / "stringtie.gtf").write_text(
-        'c\tStringTie\texon\t1\t100\t.\t+\t.\ttranscript_id "t1";\n'
-        'c\tStringTie\texon\t201\t300\t.\t+\t.\ttranscript_id "t1";\n'
+def _exon_gff3(tid: str) -> str:
+    return (
+        f"##gff-version 3\n"
+        f"c\tTrinity\texon\t1\t100\t.\t+\t.\tParent={tid}\n"
+        f"c\tTrinity\texon\t201\t300\t.\t+\t.\tParent={tid}\n"
     )
+
+
+def test_run_defuse_diamond_command_and_copy_through(tmp_path, monkeypatch):
+    # Two mapped Trinity tracks, each with a raw genome GFF3 (no .stranded.gff3).
+    (tmp_path / "trinity-denovo.genome.gff3").write_text(_exon_gff3("t1"))
+    (tmp_path / "trinity-gg.genome.gff3").write_text(_exon_gff3("t2"))
     cmds: list[list[str]] = []
     monkeypatch.setattr(defuse, "run_cmd", lambda cmd, **kw: cmds.append(cmd))
     monkeypatch.setattr(defuse, "_resolve_diamond_db", lambda config: "db")
@@ -152,28 +159,29 @@ def test_run_defuse_diamond_command_and_copy_through(tmp_path, monkeypatch):
     assert "qstart" in cmd and "qend" in cmd
     assert cmd[cmd.index("--outfmt") + 1] == "6"
     assert cmd[cmd.index("--db") + 1] == "db"
-    # no fusion -> copy-through of the input model
-    out = tmp_path / "stringtie.defuse.gff3"
-    assert out.exists()
-    assert "t1" in out.read_text()
+    # no fusion -> copy-through of each track's input model
+    out_denovo = tmp_path / "trinity-denovo.genome.defuse.gff3"
+    out_gg = tmp_path / "trinity-gg.genome.defuse.gff3"
+    assert out_denovo.exists() and "t1" in out_denovo.read_text()
+    assert out_gg.exists() and "t2" in out_gg.read_text()
 
 
 def test_run_defuse_splits_a_fused_transcript(tmp_path, monkeypatch):
-    (tmp_path / "stringtie.gtf").write_text(
-        'c\tStringTie\texon\t1\t100\t.\t+\t.\ttranscript_id "t1";\n'
-        'c\tStringTie\texon\t201\t300\t.\t+\t.\ttranscript_id "t1";\n'
-    )
+    # Homology-stranded models from strand_correct are preferred over the raw GFF3.
+    (tmp_path / "trinity-denovo.genome.stranded.gff3").write_text(_exon_gff3("t1"))
     monkeypatch.setattr(defuse, "run_cmd", lambda cmd, **kw: None)
     monkeypatch.setattr(defuse, "_resolve_diamond_db", lambda config: "db")
     monkeypatch.setattr(defuse, "_open_indexed_bam", lambda path: None)
     monkeypatch.setattr(
         defuse, "parse_positional_hits",
-        lambda path: {"st:t1": [_hit("P1", 1, 80), _hit("P2", 120, 200)]},
+        lambda path: {
+            "trinity-denovo.genome:t1": [_hit("P1", 1, 80), _hit("P2", 120, 200)]
+        },
     )
 
     run_defuse(_config(tmp_path))
 
-    text = (tmp_path / "stringtie.defuse.gff3").read_text()
+    text = (tmp_path / "trinity-denovo.genome.defuse.gff3").read_text()
     assert "t1.d1" in text and "t1.d2" in text  # split into two
     audit = (tmp_path / "defuse.tsv").read_text().splitlines()
     assert audit[0].startswith("set\ttid")

@@ -107,11 +107,24 @@ eukan/
 │   └── consensus.py    # Final model building: EVM-or-combinr dispatch + prettification
 │
 ├── assembly/           # Transcriptome assembly pipeline
-│   ├── pipeline.py     # run_assembly() dispatch (StepSpec-driven)
-│   ├── star.py         # STAR read mapping, splice site profiling, hint generation
+│   ├── pipeline.py     # run_assembly() dispatch (StepSpec-driven); _DOWNSTREAM cascade
+│   ├── star.py         # STAR read mapping + STARlong spliced transcript→genome mapping (map_transcripts)
+│   ├── segemehl.py     # segemehl read/transcript mapping (fallback + non-canonical primary); _TRANSCRIPT_SETS
+│   ├── align_hints.py  # RNA-seq intron/coverage hint emission from the read BAM
 │   ├── bam_diagnostic.py # Post-STAR soft-clip + intron BAM walk → trans-splicing / non-canonical-splice verdict
-│   ├── trinity.py      # Trinity genome-guided and de novo assembly
-│   └── pasa.py         # PASA spliced alignment and transcript hints
+│   ├── bam_introns.py  # Max-intron-bounded BAM filtering primitive
+│   ├── trinity.py      # Trinity genome-guided + de novo assembly (the active assembler, both modes)
+│   ├── tracks.py       # Single source of truth for the mapped Trinity track stems + per-track filenames
+│   ├── jaccard.py      # In-house jaccard fusion-clip (replaces Trinity --jaccard_clip; STAR-based, tunable)
+│   ├── strand_correction.py # Homology-calibrated per-transcript splice-strand flip (diamond blastx, opt-in --uniprot)
+│   ├── defuse.py       # Homology-grounded chimera splitting (opt-in --defuse + --uniprot)
+│   ├── sl_acceptors.py # Spliced-leader trans-splice acceptor detection (read-side + de novo)
+│   ├── sl_cut.py       # Genomic SL cut + max-intron split of transcript models
+│   ├── polya.py        # Poly-A characterization + unmapped de-novo transcript output
+│   ├── combinr.py      # combinr-assemble consolidation → nr_transcripts.{fasta,gff3} + hints_rnaseq.gff
+│   ├── rnaspades.py    # DORMANT: rnaSPAdes de novo (kept, unwired — Trinity replaced it)
+│   ├── stringtie.py    # DORMANT: StringTie genome-guided (kept, unwired — Trinity replaced it)
+│   └── sl_depletion.py # SL-motif primitives (FASTA depletion path retired for the genomic SL cut)
 │
 ├── repeats/            # Repeat masking pipeline
 │   ├── pipeline.py     # run_repeats() (StepSpec-driven)

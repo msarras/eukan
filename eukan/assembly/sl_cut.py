@@ -5,11 +5,12 @@ is the same exon-segregating split, fed SL acceptor *genomic* coordinates
 (:mod:`eukan.assembly.sl_acceptors`) instead of read-coverage troughs. For each
 transcript whose exons contain a same-strand acceptor, the model is cut so the
 mature mRNA begins at the acceptor. An SL site imposes its strand on an
-otherwise-unstranded (``.``) StringTie transcript.
+otherwise-unstranded (``.``) transcript.
 
-Inputs cut: the StringTie GTF (genome-guided) and the de novo transcript→genome
-BAMs (converted to gene>mRNA>exon GFF3 first). All outputs are genome-coordinate
-GFF3 that ``combinr assemble`` ingests directly. Both the BAM→GFF3 conversion and
+Inputs cut: the two Trinity transcript→genome model sets (de novo + genome-guided),
+each converted from its BAM to gene>mRNA>exon GFF3 upstream by strand_correct. All
+outputs are genome-coordinate GFF3 that ``combinr assemble`` ingests directly. Both
+the BAM→GFF3 conversion and
 the cut **stream** one transcript at a time — never materialising the full
 alignment set — so a genome-wide BAM with millions of records stays bounded.
 """
@@ -33,9 +34,9 @@ from eukan.assembly.jaccard import (
     _parse_attrs,
     _split_transcript,
     _Tx,
-    resolve_stringtie_models,
 )
 from eukan.assembly.sl_acceptors import AcceptorSite, load_sl_acceptors
+from eukan.assembly.tracks import mapped_transcript_stems, resolve_model_source
 from eukan.infra.artifacts import Artifact
 from eukan.infra.logging import get_logger
 from eukan.settings import AssemblyConfig
@@ -45,7 +46,7 @@ log = get_logger(__name__)
 # Ref-consuming CIGAR ops that stay within one exon block (N splits exons).
 _EXON_REF = frozenset([_CIGAR_M, _CIGAR_D, _CIGAR_EQ, _CIGAR_X])
 
-_DENOVO_BAMS = ("rnaspades.genome.bam",)
+_DENOVO_BAMS = ("trinity-denovo.genome.bam", "trinity-gg.genome.bam")
 _GENOME_BAM_SUFFIX = ".genome.bam"
 
 
@@ -320,30 +321,16 @@ def run_sl_cut(config: AssemblyConfig) -> None:
     sites = load_sl_acceptors(acc_path) if acc_path.exists() else []
     min_segment = config.min_sl_fragment
 
-    # Model-source precedence (latest variant wins): the homology de-fused
-    # ``*.defuse.gff3`` (produced by defuse.py when --defuse is on), then the
-    # homology-stranded ``*.stranded.gff3`` from strand_correct, then the raw models
-    # (StringTie prefers its jaccard-clipped GFF3; the de novo genome GFF3 is built
-    # from jaccard-clipped FASTAs upstream, so it needs no resolver).
-    for defused, stranded, raw, out_name in (
-        (
-            "stringtie.defuse.gff3", "stringtie.stranded.gff3",
-            resolve_stringtie_models(wd), "stringtie.sl_cut.gff3",
-        ),
-        (
-            "rnaspades.genome.defuse.gff3", "rnaspades.genome.stranded.gff3",
-            wd / "rnaspades.genome.gff3", "rnaspades.genome.sl_cut.gff3",
-        ),
-    ):
-        if (wd / defused).exists():
-            src = wd / defused
-        elif (wd / stranded).exists():
-            src = wd / stranded
-        else:
-            src = raw
-        if not src.exists():
+    # Model-source precedence per Trinity track (latest variant wins, via
+    # tracks.resolve_model_source): the homology de-fused ``*.defuse.gff3``
+    # (defuse.py, --defuse), then the homology-stranded ``*.stranded.gff3``
+    # (strand_correct), then the raw genome GFF3 (built from jaccard-clipped FASTAs
+    # upstream, so it needs no resolver).
+    for stem in mapped_transcript_stems():
+        src = resolve_model_source(wd, stem)
+        if src is None:
             continue
-        out = wd / out_name
+        out = wd / f"{stem}.sl_cut.gff3"
         n_cut, n_long = cut_models_at_sl(
             src, sites, out,
             min_segment=min_segment, max_intron_len=config.max_intron_len,

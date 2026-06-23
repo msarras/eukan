@@ -110,8 +110,8 @@ class TestAssemblyForceStepsFromRunFlags:
     """
 
     _ALL_KEYS: ClassVar[list[str]] = [
-        "assembly/star", "assembly/stringtie",
-        "assembly/rnaspades", "assembly/jaccard", "assembly/map_transcripts",
+        "assembly/star", "assembly/trinity",
+        "assembly/jaccard", "assembly/map_transcripts",
         "assembly/strand_correct", "assembly/defuse",
         "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
     ]
@@ -125,28 +125,21 @@ class TestAssemblyForceStepsFromRunFlags:
         assert assembly_force_steps_from_run_flags(force=True) == self._ALL_KEYS
 
     def test_run_star_cascades_to_genome_guided_consumers(self):
-        """Re-mapping reads invalidates StringTie + SL read-side and their downstream
-        (the de novo assembly side — rnaspades/jaccard/map_transcripts — is independent)."""
-        assert assembly_force_steps_from_run_flags(run_star=True) == [
-            "assembly/star", "assembly/stringtie", "assembly/strand_correct",
-            "assembly/defuse", "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
-        ]
+        """Re-mapping reads invalidates Trinity (both modes read the aligner BAM) and
+        the SL read-side, which together cascade through the whole transcript chain —
+        so re-mapping reads forces every step."""
+        assert assembly_force_steps_from_run_flags(run_star=True) == self._ALL_KEYS
 
     def test_run_combinr_alone_forces_combinr_only(self):
         assert assembly_force_steps_from_run_flags(run_combinr=True) == ["assembly/combinr"]
 
-    def test_run_rnaspades_cascades_through_de_novo_chain(self):
-        """Re-assembling de novo invalidates the whole downstream transcript chain."""
-        assert assembly_force_steps_from_run_flags(run_rnaspades=True) == [
-            "assembly/rnaspades", "assembly/jaccard", "assembly/map_transcripts",
+    def test_run_trinity_cascades_through_transcript_chain(self):
+        """Re-assembling Trinity (both de novo + genome-guided FASTAs) invalidates the
+        whole downstream transcript chain: jaccard re-clips → map_transcripts re-maps →
+        strand_correct/defuse/sl_detect/sl_cut/combinr all re-run."""
+        assert assembly_force_steps_from_run_flags(run_trinity=True) == [
+            "assembly/trinity", "assembly/jaccard", "assembly/map_transcripts",
             "assembly/strand_correct", "assembly/defuse", "assembly/sl_detect",
-            "assembly/sl_cut", "assembly/combinr",
-        ]
-
-    def test_run_stringtie_cascades_downstream(self):
-        """StringTie's GTF feeds strand_correct + the SL cut, which feeds combinr."""
-        assert assembly_force_steps_from_run_flags(run_stringtie=True) == [
-            "assembly/stringtie", "assembly/strand_correct", "assembly/defuse",
             "assembly/sl_cut", "assembly/combinr",
         ]
 
@@ -177,35 +170,35 @@ class TestAssemblyForceStepsFromRunFlags:
         ]
 
     def test_run_star_with_force_takes_run_flag(self):
-        """--run-star --force scopes to star's cascade; --run-X takes precedence over --force."""
-        assert assembly_force_steps_from_run_flags(run_star=True, force=True) == [
-            "assembly/star", "assembly/stringtie", "assembly/strand_correct",
-            "assembly/defuse", "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
-        ]
+        """--run-star --force scopes to star's cascade; --run-X takes precedence over
+        --force. Star's cascade now spans the whole pipeline (Trinity reads its BAM)."""
+        assert (
+            assembly_force_steps_from_run_flags(run_star=True, force=True)
+            == self._ALL_KEYS
+        )
 
     def test_segemehl_aligner_cascades_to_consumers(self):
-        """The segemehl read step cascades to the same genome-guided consumers as star."""
+        """The segemehl read step cascades to the same consumers as star — Trinity and
+        the SL read-side — which together reach every downstream step."""
         assert assembly_force_steps_from_run_flags(
             aligner="segemehl", run_segemehl=True
         ) == [
-            "assembly/segemehl", "assembly/stringtie", "assembly/strand_correct",
-            "assembly/defuse", "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
+            "assembly/segemehl", "assembly/trinity", "assembly/jaccard",
+            "assembly/map_transcripts", "assembly/strand_correct", "assembly/defuse",
+            "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
         ]
 
     def test_multiple_run_flags(self):
-        """--run-star (cascades) plus --run-combinr; union in pipeline order."""
+        """--run-star (cascades to everything) plus --run-combinr; union in order."""
         result = assembly_force_steps_from_run_flags(run_star=True, run_combinr=True)
-        assert result == [
-            "assembly/star", "assembly/stringtie", "assembly/strand_correct",
-            "assembly/defuse", "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
-        ]
+        assert result == self._ALL_KEYS
 
     def test_step_order_is_pipeline_order(self):
         """Returned keys follow pipeline order regardless of kwarg order."""
         result = assembly_force_steps_from_run_flags(
             run_combinr=True, run_sl_cut=True, run_sl_detect=True,
-            run_map_transcripts=True, run_jaccard=True, run_rnaspades=True,
-            run_stringtie=True, run_star=True,
+            run_map_transcripts=True, run_jaccard=True, run_trinity=True,
+            run_star=True,
         )
         assert result == self._ALL_KEYS
 
@@ -420,12 +413,6 @@ class TestAssemblyStepScalars:
         spec = next(s for s in _steps_for("auto") if s.name == name)
         return spec.scalars(cfg) if spec.scalars else None
 
-    def test_stringtie_tracks_max_intron_and_stringency(self, tmp_path):
-        scalars = self._scalars(tmp_path, "stringtie")
-        assert "max_intron_len=5000" in scalars
-        assert any(s.startswith("stringtie_min_coverage=") for s in scalars)
-        assert any(s.startswith("stringtie_min_isoform_fraction=") for s in scalars)
-
     def test_jaccard_has_no_scalar(self, tmp_path):
         # jaccard has no declared output, so it always re-runs on resume and a
         # scalar would never be consulted (is_step_complete short-circuits first);
@@ -449,7 +436,9 @@ class TestAssemblyStepScalars:
 
     def test_mappers_do_not_track_max_intron(self, tmp_path):
         # segemehl ignores -M natively; a scalar there would force a needless re-map.
-        for name in ("star", "map_transcripts"):
+        # Trinity (replacing the old stringtie/rnaspades steps) just emits transcript
+        # FASTAs with no -M enforcement, so it likewise carries no resume scalar.
+        for name in ("star", "trinity", "map_transcripts"):
             assert self._scalars(tmp_path, name) is None
 
 

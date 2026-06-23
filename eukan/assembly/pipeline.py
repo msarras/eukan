@@ -8,13 +8,12 @@ from pathlib import Path
 from eukan.assembly.combinr import run_combinr
 from eukan.assembly.defuse import run_defuse
 from eukan.assembly.jaccard import run_jaccard
-from eukan.assembly.rnaspades import run_rnaspades
 from eukan.assembly.segemehl import map_reads_segemehl
 from eukan.assembly.sl_acceptors import detect_sl_acceptors
 from eukan.assembly.sl_cut import run_sl_cut
 from eukan.assembly.star import map_reads, map_reads_auto, map_transcripts
 from eukan.assembly.strand_correction import run_strand_correction
-from eukan.assembly.stringtie import run_stringtie
+from eukan.assembly.trinity import run_trinity
 from eukan.infra.artifacts import Artifact
 from eukan.infra.manifest import ASSEMBLY, step_key
 from eukan.infra.pipeline import (
@@ -49,53 +48,46 @@ def _denovo_genome_bams(config: AssemblyConfig) -> list[Path]:
 
 
 def _strand_correct_inputs(config: AssemblyConfig) -> list[Path]:
-    from eukan.assembly.jaccard import resolve_stringtie_models
-
-    return [*_denovo_genome_bams(config), resolve_stringtie_models(config.work_dir)]
+    # strand_correct converts each Trinity transcript->genome BAM to models, so a
+    # changed BAM (re-mapping) re-runs it.
+    return _denovo_genome_bams(config)
 
 
 def _sl_detect_inputs(config: AssemblyConfig) -> list[Path]:
     # The read aligner BAM also feeds SL detection, but it is large and only
     # changes when the aligner is re-run (which cascades via the run flags), so
-    # only the de novo BAMs — the map_transcripts result — are fingerprinted.
+    # only the Trinity track BAMs — the map_transcripts result — are fingerprinted.
     return _denovo_genome_bams(config)
 
 
 def _defuse_inputs(config: AssemblyConfig) -> list[Path]:
-    # The models de-fusion reads: the homology-stranded models when strand_correct
-    # produced them, else the raw / jaccard-clipped fallbacks (the same set sl_cut
-    # resolves). Whichever exist are fingerprinted, so re-running strand_correct
-    # re-runs defuse.
-    from eukan.assembly.jaccard import resolve_stringtie_models
-    from eukan.assembly.strand_correction import (
-        _DENOVO_GFF3,
-        _DENOVO_STRANDED,
-        _STRINGTIE_STRANDED,
-    )
+    # The models de-fusion reads per track: the homology-stranded models when
+    # strand_correct produced them, else the raw genome GFF3. Whichever exist are
+    # fingerprinted, so re-running strand_correct re-runs defuse.
+    from eukan.assembly.tracks import mapped_transcript_stems
 
     wd = config.work_dir
-    return [
-        wd / _STRINGTIE_STRANDED, resolve_stringtie_models(wd),
-        wd / _DENOVO_STRANDED, wd / _DENOVO_GFF3,
-    ]
+    paths: list[Path] = []
+    for stem in mapped_transcript_stems():
+        paths += [wd / f"{stem}.stranded.gff3", wd / f"{stem}.gff3"]
+    return paths
 
 
 def _sl_cut_inputs(config: AssemblyConfig) -> list[Path]:
-    from eukan.assembly.defuse import DEFUSE_DENOVO, DEFUSE_STRINGTIE
-    from eukan.assembly.jaccard import resolve_stringtie_models
-    from eukan.assembly.strand_correction import (
-        _DENOVO_GFF3,
-        _DENOVO_STRANDED,
-        _STRINGTIE_STRANDED,
-    )
+    # Per track, sl_cut resolves defuse > stranded > raw genome GFF3, plus the SL
+    # acceptor sites. Fingerprint all candidates so any upstream change re-runs it.
+    from eukan.assembly.tracks import mapped_transcript_stems
 
     wd = config.work_dir
-    return [
-        wd / DEFUSE_STRINGTIE, wd / DEFUSE_DENOVO,
-        wd / _STRINGTIE_STRANDED, resolve_stringtie_models(wd),
-        wd / _DENOVO_STRANDED, wd / _DENOVO_GFF3,
-        wd / Artifact.SL_ACCEPTORS.value,
-    ]
+    paths: list[Path] = []
+    for stem in mapped_transcript_stems():
+        paths += [
+            wd / f"{stem}.defuse.gff3",
+            wd / f"{stem}.stranded.gff3",
+            wd / f"{stem}.gff3",
+        ]
+    paths.append(wd / Artifact.SL_ACCEPTORS.value)
+    return paths
 
 
 def _combinr_inputs(config: AssemblyConfig) -> list[Path]:
@@ -122,17 +114,6 @@ def _combinr_scalars(config: AssemblyConfig) -> list[str]:
     return [
         f"max_intron_len={config.max_intron_len}",
         f"combinr_stringent_overlap={config.combinr_stringent_overlap}",
-    ]
-
-
-def _stringtie_scalars(config: AssemblyConfig) -> list[str]:
-    # StringTie reads a max-intron-bounded BAM and runs at a configurable -c/-f/-j
-    # stringency; changing any of these re-assembles the genome-guided set.
-    return [
-        f"max_intron_len={config.max_intron_len}",
-        f"stringtie_min_coverage={config.stringtie_min_coverage}",
-        f"stringtie_min_isoform_fraction={config.stringtie_min_isoform_fraction}",
-        f"stringtie_min_junction_coverage={config.stringtie_min_junction_coverage}",
     ]
 
 
@@ -172,19 +153,17 @@ def _aligner_step(aligner: str) -> StepSpec:
 
 
 def _steps_for(aligner: str) -> list[StepSpec]:
-    """Assembly steps: <aligner> → stringtie (genome-guided) → rnaspades (de novo)
-    → jaccard → map_transcripts → strand_correct → defuse → sl_detect → sl_cut →
-    combinr."""
+    """Assembly steps: <aligner> → trinity (de novo + genome-guided) → jaccard
+    → map_transcripts → strand_correct → defuse → sl_detect → sl_cut → combinr."""
     return [
         _aligner_step(aligner),
-        # stringtie reads a max-intron-bounded copy of the segemehl read BAM, so a
-        # changed -M must re-run it (scalars); the bounded BAM is built in-step.
-        StepSpec(
-            "stringtie", run_stringtie, "stringtie.gtf", "--run-stringtie",
-            scalars=_stringtie_scalars,
-        ),
-        StepSpec("rnaspades", run_rnaspades, "rnaspades.fasta", "--run-rnaspades"),
-        # No declared output: jaccard rewrites each transcript FASTA into a
+        # Trinity assembles both de novo and genome-guided transcript FASTAs;
+        # genome-guided reads the aligner BAM (config.aligner_bam) only to cluster
+        # reads per locus, so its output is still a transcript FASTA mapped back to
+        # the genome by map_transcripts. Declared output is trinity-denovo.fasta
+        # (produced last), so its presence marks both modes done on resume.
+        StepSpec("trinity", run_trinity, "trinity-denovo.fasta", "-T / --run-trinity"),
+        # No declared output: jaccard rewrites each Trinity FASTA into a
         # ``.jaccard.fasta`` sibling, but on single-end input (or zero clips) it
         # legitimately writes nothing, so stale-output validation must not fire.
         # Having no declared output it always re-runs on resume, so a changed
@@ -194,11 +173,11 @@ def _steps_for(aligner: str) -> list[StepSpec]:
         StepSpec("jaccard", run_jaccard, None, "--run-jaccard"),
         StepSpec(
             "map_transcripts", map_transcripts,
-            "rnaspades.genome.bam", "--run-map-transcripts",
+            "trinity-denovo.genome.bam", "--run-map-transcripts",
             inputs=_resolved_transcript_queries,
         ),
-        # No declared output: strand_correct always converts the de novo BAM to
-        # rnaspades.genome.gff3 (for the SL cut), but only writes the *.stranded.gff3
+        # No declared output: strand_correct always converts each Trinity track BAM
+        # to <track>.genome.gff3 (for the SL cut), but only writes the *.stranded.gff3
         # homology-corrected models when --uniprot is given on an unstranded library,
         # so stale-output validation must not fire when it's a no-op.
         StepSpec(
@@ -206,12 +185,12 @@ def _steps_for(aligner: str) -> list[StepSpec]:
             inputs=_strand_correct_inputs,
         ),
         # Homology de-fusion: splits chimeric transcripts flagged by >=2 distinct
-        # non-overlapping SwissProt hits. Always writes stringtie.defuse.gff3 when it
-        # runs (copy-through if nothing split), so it can declare an output + scalars
-        # for precise resume; skipped entirely (run_assembly skip) unless
+        # non-overlapping SwissProt hits. Always writes <track>.genome.defuse.gff3
+        # when it runs (copy-through if nothing split), so it can declare an output +
+        # scalars for precise resume; skipped entirely (run_assembly skip) unless
         # --defuse + --uniprot are set.
         StepSpec(
-            "defuse", run_defuse, "stringtie.defuse.gff3", "--run-defuse",
+            "defuse", run_defuse, "trinity-denovo.genome.defuse.gff3", "--run-defuse",
             inputs=_defuse_inputs, scalars=_defuse_scalars,
         ),
         # sl_detect/sl_cut have no declared output: with no SL signal sl_detect
@@ -235,18 +214,17 @@ def _steps_for(aligner: str) -> list[StepSpec]:
 
 # Within-pipeline data dependencies: re-running a step (via its --run-* flag)
 # invalidates every step that consumes its output, so those are forced too. The
-# read aligner is cascaded because StringTie (genome-guided) and SL read-side
-# detection read its BAM — and in 'auto' mode that BAM may switch from STAR to
-# segemehl. Each edge below is "producer -> direct consumers".
+# read aligner is cascaded because Trinity genome-guided (config.aligner_bam) and
+# SL read-side detection read its BAM — and in 'auto' mode that BAM may switch from
+# STAR to segemehl. Each edge below is "producer -> direct consumers".
 _DOWNSTREAM: dict[str, tuple[str, ...]] = {
-    "star": ("stringtie", "sl_detect"),
-    "segemehl": ("stringtie", "sl_detect"),
-    "stringtie": ("strand_correct", "sl_cut"),
-    "rnaspades": ("jaccard",),
-    # jaccard now also clips the StringTie GTF -> stringtie.jaccard.gff3, which
-    # strand_correct/sl_cut read, so re-running it must re-run strand_correct too
-    # (map_transcripts already reaches it, but the edge is now direct).
-    "jaccard": ("map_transcripts", "strand_correct"),
+    "star": ("trinity", "sl_detect"),
+    "segemehl": ("trinity", "sl_detect"),
+    "trinity": ("jaccard",),
+    # jaccard rewrites the Trinity FASTAs into .jaccard.fasta siblings that
+    # map_transcripts maps, so re-running it re-runs map_transcripts (which
+    # cascades on to strand_correct etc.).
+    "jaccard": ("map_transcripts",),
     "map_transcripts": ("strand_correct", "sl_detect"),
     # strand_correct now feeds defuse, which feeds sl_cut. When defuse is disabled it
     # is skipped but stays in the cascade, so the transitive closure still reaches
@@ -275,8 +253,7 @@ def force_steps_from_run_flags(
     aligner: str = "star",
     run_star: bool = False,
     run_segemehl: bool = False,
-    run_stringtie: bool = False,
-    run_rnaspades: bool = False,
+    run_trinity: bool = False,
     run_jaccard: bool = False,
     run_map_transcripts: bool = False,
     run_strand_correct: bool = False,
@@ -290,7 +267,7 @@ def force_steps_from_run_flags(
 
     ``--force`` re-runs every step. An individual ``--run-X`` re-runs that step
     *and every downstream step that consumes its output* (``_DOWNSTREAM``): e.g.
-    ``--run-map-transcripts`` re-maps the de novo transcripts and then re-runs
+    ``--run-map-transcripts`` re-maps the Trinity transcripts and then re-runs
     strand_correct, sl_detect, sl_cut, and combinr, which read the new BAM
     (directly or transitively). The inactive aligner's flag is a harmless no-op.
     Returns keys in pipeline order.
@@ -298,8 +275,8 @@ def force_steps_from_run_flags(
     steps = _steps_for(aligner)
     valid = {s.name for s in steps}
     flags = {
-        "star": run_star, "segemehl": run_segemehl, "stringtie": run_stringtie,
-        "rnaspades": run_rnaspades, "jaccard": run_jaccard,
+        "star": run_star, "segemehl": run_segemehl, "trinity": run_trinity,
+        "jaccard": run_jaccard,
         "map_transcripts": run_map_transcripts,
         "strand_correct": run_strand_correct, "defuse": run_defuse,
         "sl_detect": run_sl_detect, "sl_cut": run_sl_cut, "combinr": run_combinr,
@@ -324,7 +301,6 @@ def run_assembly(
     run_simple_pipeline(
         ASSEMBLY, _steps_for(config.aligner), config,
         force_steps=force_steps,
-        skip=lambda s: (s.name == "rnaspades" and not config.rnaspades)
-        or (s.name == "jaccard" and not config.jaccard_clip)
+        skip=lambda s: (s.name == "jaccard" and not config.jaccard_clip)
         or (s.name == "defuse" and not (config.defuse and config.uniprot_db is not None)),
     )
