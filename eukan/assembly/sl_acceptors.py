@@ -36,11 +36,13 @@ from eukan.assembly.bam_diagnostic import (
     _iter_primary_alignments,
 )
 from eukan.assembly.sl_depletion import (
+    _BUILTIN_ADAPTERS,
     _MAX_MISMATCHES,
     _MIN_MOTIF_LEN,
     _find_sites,
     _revcomp,
     _variants,
+    is_adapter,
 )
 from eukan.infra.artifacts import Artifact
 from eukan.infra.logging import get_logger
@@ -140,8 +142,20 @@ def _iter_sl_ops(
             rpos += length
 
 
-def _read_verdict_consensus(wd: Path) -> str | None:
-    """The read-side SL consensus from the soft-clip diagnostic, gated on verdict."""
+def _effective_adapters(config: AssemblyConfig) -> list[str]:
+    """Adapter sequences to screen SL candidates against, or ``[]`` when the
+    filter is off (so :func:`is_adapter` becomes a no-op)."""
+    if not config.sl_adapter_filter:
+        return []
+    return [*_BUILTIN_ADAPTERS, *config.adapter_sequences]
+
+
+def _read_verdict_consensus(wd: Path, adapters: list[str]) -> str | None:
+    """The read-side SL consensus from the soft-clip diagnostic, gated on verdict.
+
+    Rejected when the recovered motif is just sequencing adapter, so residual
+    adapter read-through can never be promoted to the SL consensus.
+    """
     summary = wd / Artifact.SOFTCLIP_DIAGNOSTIC.value
     if not summary.exists():
         return None
@@ -153,15 +167,25 @@ def _read_verdict_consensus(wd: Path) -> str | None:
         or ts.get("top_non_trivial_cluster_key")
         or ""
     ).upper()
-    return motif if len(motif) >= _MIN_MOTIF_LEN else None
+    if len(motif) < _MIN_MOTIF_LEN or is_adapter(motif, adapters):
+        return None
+    return motif
 
 
-def _dominant_denovo_motif(bams: list[Path], *, min_support: int) -> str | None:
+def _dominant_denovo_motif(
+    bams: list[Path], *, min_support: int, adapters: list[str]
+) -> str | None:
     """Most common anchored SL window across de novo clip/insertion bases.
 
     Pools the head and tail ``_CONSENSUS_LEN``-mers of every candidate SL op; the
     leader is constant, so its windows dominate. Used only as a fallback when the
     read-side verdict is too weak to supply a consensus.
+
+    Adapter windows are skipped: in adapter-contaminated data the read-through is
+    often the single most common window, so taking the most common one outright
+    would lock the consensus onto adapter — instead we return the most common
+    window that is long enough *and* not adapter, recovering a real SL ranked
+    behind the contamination.
     """
     counts: Counter[str] = Counter()
     for bam_path in bams:
@@ -177,10 +201,14 @@ def _dominant_denovo_motif(bams: list[Path], *, min_support: int) -> str | None:
                     if len(b) >= _CONSENSUS_LEN:
                         counts[b[:_CONSENSUS_LEN]] += 1
                         counts[b[-_CONSENSUS_LEN:]] += 1
-    if not counts:
-        return None
-    motif, n = counts.most_common(1)[0]
-    return motif if n >= min_support and len(motif) >= _MIN_MOTIF_LEN else None
+    # most_common() is count-descending: once support drops below the floor no
+    # later window qualifies either, so stop.
+    for motif, n in counts.most_common():
+        if n < min_support:
+            break
+        if len(motif) >= _MIN_MOTIF_LEN and not is_adapter(motif, adapters):
+            return motif
+    return None
 
 
 def build_joint_consensus(
@@ -191,15 +219,20 @@ def build_joint_consensus(
     Priority: explicit ``sl_sequence`` override → read-side soft-clip verdict
     (authoritative when trans-splicing is called STRONG/MODERATE) → the dominant
     de novo insertion motif (so strong de novo signal still drives detection when
-    the read verdict is borderline). ``None`` means no SL signal.
+    the read verdict is borderline). ``None`` means no SL signal. Recovered
+    motifs (verdict / de novo) that are just sequencing adapter are filtered out;
+    an explicit ``sl_sequence`` override is trusted as-is.
     """
     if config.sl_sequence:
         return config.sl_sequence.strip().upper()
-    read_motif = _read_verdict_consensus(config.work_dir)
+    adapters = _effective_adapters(config)
+    read_motif = _read_verdict_consensus(config.work_dir, adapters)
     if read_motif:
         log.info("SL consensus from read soft-clip verdict: %s", read_motif)
         return read_motif
-    denovo_motif = _dominant_denovo_motif(denovo_bams, min_support=_MIN_DENOVO_SUPPORT)
+    denovo_motif = _dominant_denovo_motif(
+        denovo_bams, min_support=_MIN_DENOVO_SUPPORT, adapters=adapters
+    )
     if denovo_motif:
         log.info("SL consensus from de novo insertions (read verdict weak): %s", denovo_motif)
         return denovo_motif
@@ -276,6 +309,7 @@ def detect_sl_acceptors(config: AssemblyConfig) -> None:
     read_bam = wd / config.aligner_bam
     denovo_bams = [wd / b for b in _DENOVO_BAMS if (wd / b).exists()]
     out = wd / Artifact.SL_ACCEPTORS.value
+    adapters = _effective_adapters(config)
 
     consensus = build_joint_consensus(config, denovo_bams)
     if consensus is None:
@@ -315,8 +349,14 @@ def detect_sl_acceptors(config: AssemblyConfig) -> None:
                     min_ins_len=config.min_sl_insertion_len,
                     scan_insertions=scan_insertions,
                 ):
+                    b = bases.upper()
+                    # Defensive: a real SL core won't exact-match adapter, but if
+                    # the consensus were adapter-derived, skip adapter ops so they
+                    # never seed acceptor sites.
+                    if adapters and is_adapter(b, adapters):
+                        continue
                     patterns = fwd_patterns if strand == "+" else rev_patterns
-                    if _find_sites(bases.upper(), patterns, motif_len):
+                    if _find_sites(b, patterns, motif_len):
                         support, sources = raw.get((chrom, strand, pos), (0, set()))
                         sources.add(source)
                         raw[(chrom, strand, pos)] = (support + 1, sources)

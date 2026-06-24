@@ -13,11 +13,14 @@ from eukan.assembly.sl_acceptors import (
     detect_sl_acceptors,
     load_sl_acceptors,
 )
+from eukan.assembly.sl_depletion import _revcomp, is_adapter
 from eukan.infra.artifacts import Artifact
 from eukan.settings import AssemblyConfig
 
 SL = "GTACTTTATT"            # 10 bp, meets _MIN_MOTIF_LEN
 SL16 = "GTACTTTATTCCGGAA"    # 16 bp, meets _CONSENSUS_LEN
+ADAPT = "AGATCGGAAGAGC"      # Illumina universal / TruSeq read-through seed
+ADAPT16 = "AGATCGGAAGAGCACA"  # 16 bp read-through window (PE1/PE2 rc start; holds the seed)
 
 
 def _header(ref="chr1", ref_len=100_000):
@@ -204,7 +207,6 @@ def test_detect_matches_core_of_overlong_consensus(tmp_path):
 def test_detect_is_orientation_aware(tmp_path):
     """A clip whose motif orientation contradicts its geometry strand is rejected;
     a genuinely reverse-complement leader at a trailing clip is kept as '-'."""
-    from eukan.assembly.sl_depletion import _revcomp
     cfg = _config(tmp_path, sl_sequence=SL16)
     _make_bam(tmp_path / "trinity-denovo.genome.bam", [
         ("wrong", 0, 100, [(0, 20), (4, 16)], "A" * 20 + SL16),            # fwd SL, '-' geom → drop
@@ -237,3 +239,116 @@ def test_acceptor_site_roundtrip(tmp_path):
     ]
     _write_acceptors(sites, out)
     assert load_sl_acceptors(out) == sites
+
+
+# --- is_adapter (adapter-vs-SL discrimination) -----------------------------
+
+
+def test_is_adapter_illumina_read_through():
+    assert is_adapter("AGATCGGAAGAGCACACGTCTGAAC")  # full Illumina read-through
+
+
+def test_is_adapter_reverse_complement():
+    # Adapter on the opposite strand (RC of a read-through window) is still caught.
+    assert is_adapter(_revcomp(ADAPT16))
+
+
+def test_is_adapter_eleven_bp_window_flagged():
+    # 11 contiguous bp of the seed embedded in a longer clip → adapter.
+    assert is_adapter("GGGG" + ADAPT[:11] + "TTTT")
+
+
+def test_is_adapter_ten_bp_share_not_flagged():
+    # Shares only 10 bp with the seed (breaks at bp 11) → below the 11 bp floor.
+    assert not is_adapter("TTTT" + ADAPT[:10] + "TTTT")
+
+
+def test_is_adapter_nextera_flagged():
+    assert is_adapter("GGG" + "CTGTCTCTTATACACATCT" + "GGG")
+
+
+def test_is_adapter_real_sl_not_flagged():
+    assert not is_adapter(SL16)
+
+
+def test_is_adapter_empty_list_disables():
+    assert not is_adapter(ADAPT16, [])
+
+
+# --- adapter discrimination in consensus selection -------------------------
+
+
+def _denovo_ins_reads(n, motif16, prefix):
+    """n de novo reads each carrying *motif16* as an internal 16 bp insertion."""
+    return [
+        (f"{prefix}{i}", 0, 100 + i * 50, [(0, 10), (1, 16), (0, 10)],
+         "C" * 10 + motif16 + "C" * 10)
+        for i in range(n)
+    ]
+
+
+def test_consensus_adapter_only_denovo_is_none(tmp_path):
+    bam = tmp_path / "trinity-denovo.genome.bam"
+    _make_bam(bam, _denovo_ins_reads(3, ADAPT16, "a"))
+    assert build_joint_consensus(_config(tmp_path), [bam]) is None
+
+
+def test_consensus_real_sl_wins_over_dominant_adapter(tmp_path):
+    # Adapter is the most common window (3 reads) but a real SL ranks behind it
+    # (2 reads, still >= _MIN_DENOVO_SUPPORT once head+tail are pooled). The
+    # skip-and-continue must surface the SL rather than lock onto the adapter.
+    bam = tmp_path / "trinity-denovo.genome.bam"
+    _make_bam(bam, _denovo_ins_reads(3, ADAPT16, "a") + _denovo_ins_reads(2, SL16, "s"))
+    assert build_joint_consensus(_config(tmp_path), [bam]) == SL16
+
+
+def test_consensus_adapter_verdict_rejected(tmp_path):
+    _write_verdict(tmp_path, "STRONG", consensus=ADAPT16)
+    assert build_joint_consensus(_config(tmp_path), []) is None
+
+
+def test_consensus_adapter_override_not_filtered(tmp_path):
+    # An explicit --sl-sequence override is trusted as-is, even if adapter-like.
+    assert build_joint_consensus(_config(tmp_path, sl_sequence=ADAPT16), []) == ADAPT16
+
+
+def test_consensus_adapter_filter_off_lets_adapter_through(tmp_path):
+    bam = tmp_path / "trinity-denovo.genome.bam"
+    _make_bam(bam, _denovo_ins_reads(3, ADAPT16, "a"))
+    cfg = _config(tmp_path, sl_adapter_filter=False)
+    assert build_joint_consensus(cfg, [bam]) == ADAPT16
+
+
+def test_detect_adapter_only_is_noop(tmp_path):
+    """S. pombe in miniature: the only soft-clip / insertion signal is Illumina
+    adapter read-through, so no SL consensus is recovered and no acceptors written."""
+    cfg = _config(tmp_path)
+    _make_bam(tmp_path / "segemehl_Aligned.sortedByCoord.out.bam",
+              [("r1", 0, 100, [(0, 30), (4, 16)], "A" * 30 + ADAPT16)])  # trailing adapter clip
+    _make_bam(tmp_path / "trinity-denovo.genome.bam", _denovo_ins_reads(3, ADAPT16, "a"))
+    detect_sl_acceptors(cfg)
+    out = tmp_path / "sl_acceptors.gff3"
+    assert out.exists()
+    assert load_sl_acceptors(out) == []
+
+
+def test_detect_scan_skips_adapter_clip_under_adapter_override(tmp_path):
+    # Even when an adapter is the (override-trusted) consensus, the defensive scan
+    # skips adapter ops, so adapter read-through seeds no acceptor sites.
+    cfg = _config(tmp_path, sl_sequence=ADAPT16)
+    _make_bam(tmp_path / "trinity-denovo.genome.bam",
+              [("t1", 0, 100, [(4, 16), (0, 20)], ADAPT16 + "A" * 20)])  # leading adapter clip
+    detect_sl_acceptors(cfg)
+    assert load_sl_acceptors(tmp_path / "sl_acceptors.gff3") == []
+
+
+def test_detect_scan_filter_off_keeps_adapter_clip(tmp_path):
+    # With the filter off the same adapter clip is matched against the adapter
+    # consensus and recorded — confirming the toggle gates the scan, not just
+    # consensus selection.
+    cfg = _config(tmp_path, sl_sequence=ADAPT16, sl_adapter_filter=False)
+    _make_bam(tmp_path / "trinity-denovo.genome.bam",
+              [("t1", 0, 100, [(4, 16), (0, 20)], ADAPT16 + "A" * 20)])
+    detect_sl_acceptors(cfg)
+    sites = {(s.pos, s.strand) for s in load_sl_acceptors(tmp_path / "sl_acceptors.gff3")}
+    assert (101, "+") in sites

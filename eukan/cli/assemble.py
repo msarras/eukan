@@ -121,6 +121,19 @@ from eukan.cli._framework import (
     help="Genomic window (bp) for consolidating SL acceptor sites.",
 )
 @optgroup.option(
+    "--adapter-sequence", "adapter_sequence", multiple=True,
+    help="Extra sequencing-adapter sequence to exclude from SL detection "
+    "(repeatable). Added to the built-in Illumina/Nextera set; use for "
+    "platform-specific adapters (e.g. MGI/BGI).",
+)
+@optgroup.option(
+    "--sl-adapter-filter/--no-sl-adapter-filter", default=None,
+    help="Screen the recovered SL consensus / acceptor candidates against known "
+    "sequencing adapters so residual Illumina read-through (e.g. AGATCGGAAGAGC) "
+    "isn't mistaken for a spliced leader. On by default; --no-sl-adapter-filter "
+    "disables it.",
+)
+@optgroup.option(
     "--combinr-path", type=click.Path(exists=True, path_type=Path), default=None,
     help="Path to the combinr binary (else resolved from PATH or "
     "$EUKAN_ASSEMBLE_COMBINR_PATH).",
@@ -217,6 +230,8 @@ def assemble(
     defuse_overlap_tolerance: float | None,
     sl_sequence: str | None,
     sl_cluster_window: int,
+    adapter_sequence: tuple[str, ...],
+    sl_adapter_filter: bool | None,
     combinr_path: Path | None,
     uniprot: Path | None,
     splice_permissive: bool,
@@ -278,6 +293,8 @@ def assemble(
         defuse_overlap_tolerance=defuse_overlap_tolerance,
         sl_sequence=sl_sequence,
         sl_cluster_window=sl_cluster_window,
+        adapter_sequences=list(adapter_sequence),
+        sl_adapter_filter=sl_adapter_filter,
         combinr_path=resolve_optional_path(combinr_path),
         uniprot_db=resolve_optional_path(uniprot),
         splice_permissive=splice_permissive,

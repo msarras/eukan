@@ -393,6 +393,15 @@ class AssemblyConfig(_StepRunSettings):
     """Minimum soft-clip length (bp) considered as a spliced-leader acceptor signal."""
     min_sl_insertion_len: int = 10
     """Minimum internal-insertion length (bp) considered as a spliced-leader signal."""
+    adapter_sequences: list[str] = Field(default_factory=list)
+    """Extra sequencing-adapter sequences, added to the built-in Illumina/Nextera
+    set (``eukan.assembly.sl_depletion._BUILTIN_ADAPTERS``), excluded from SL
+    detection so residual adapter read-through isn't mistaken for a spliced leader."""
+    sl_adapter_filter: bool = True
+    """Screen recovered SL consensus / acceptor candidates against known adapters
+    (the built-in set plus ``adapter_sequences``). Turn off to let adapter sequence
+    be treated as a spliced leader — the escape hatch for the rare case where a
+    genuine SL legitimately overlaps an adapter seed."""
 
     # --- Homology-based splice-strand correction (unstranded libraries) ---
     uniprot_db: Path | None = None
