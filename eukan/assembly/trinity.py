@@ -33,6 +33,14 @@ def _run_trinity_mode(
     (with STAR rather than Trinity's slower bowtie2 pass, and with the tunable
     ``--jaccard-*`` knobs), so passing it here too would double-clip Trinity's
     contigs.
+
+    ``--no_salmon`` skips Trinity's final salmon-based expression filtering of
+    isoforms. bioconda's Trinity 2.15.2 pulls salmon 2.x (the Rust rewrite),
+    whose CLI dropped the ``--minAssignedFrags``/``--validateMappings`` flags
+    Trinity still passes, so the filter step errors out on every platform; the
+    C++ salmon 1.x that *does* accept them is compiled with AVX2 and SIGILLs on
+    pre-Haswell CPUs. Skipping it lets Trinity finish; the combinr consolidation
+    step downstream removes the redundant isoforms the filter would have.
     """
     wd = config.work_dir
     final = wd / f"{prefix}.fasta"
@@ -50,6 +58,7 @@ def _run_trinity_mode(
             "--max_memory", f"{config.memory_gb}G",
             "--CPU", str(config.num_cpu),
             "--full_cleanup",
+            "--no_salmon",
             "--output", prefix,
             *lib_type_args,
         ],
