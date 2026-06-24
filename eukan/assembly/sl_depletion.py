@@ -15,6 +15,8 @@ matching primitives remain here.)
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 # Shortest SL motif we will match on. A very short motif (e.g. the 6 bp GTACTT
 # core) occurs by chance often enough to shred transcripts, so require a more
 # specific one before matching.
@@ -32,6 +34,56 @@ _DNA_COMP = str.maketrans("ACGTNacgtn", "TGCANtgcan")
 
 def _revcomp(seq: str) -> str:
     return seq.translate(_DNA_COMP)[::-1]
+
+
+# Canonical sequencing-adapter seeds, from FastQC's Configuration/adapter_list.txt
+# (cross-checked against Trimmomatic's TruSeq3 adapters). Reads are not adapter-
+# trimmed upstream, so residual adapter read-through survives as soft-clipped read
+# ends / de novo insertions and otherwise masquerades as a spliced leader. These
+# are the conserved 5' seeds the read-through starts with; both strands are
+# screened by is_adapter() since a clip's orientation is arbitrary.
+#
+# FastQC's PolyA/PolyG entries are deliberately omitted: the SL is A/T-rich and
+# poly-A tails are already a known false-positive hazard here (see _MAX_MISMATCHES
+# above), so a poly-A blocklist entry would shred genuine A-rich SL cores.
+_BUILTIN_ADAPTERS = (
+    "AGATCGGAAGAGC",        # Illumina universal / TruSeq (R1 & R2 read-through prefix)
+    "CTGTCTCTTATACACATCT",  # Nextera / Tn5 transposase
+    "TGGAATTCTCGG",         # Illumina small-RNA 3'
+    "GATCGTCGGACT",         # Illumina small-RNA 5'
+)
+
+# A candidate must share at least this many contiguous bp with an adapter to be
+# rejected. The shortest seed above is 12 bp; 11 still catches read-through
+# truncated to 11-12 bp, yet 4^11 (~4.2M) makes accidental sharing with a real
+# (>=10 bp, A/T-rich) SL core implausible, and it stays >= _MIN_MOTIF_LEN.
+_ADAPTER_MIN_OVERLAP = 11
+
+
+def is_adapter(
+    seq: str,
+    adapters: Iterable[str] = _BUILTIN_ADAPTERS,
+    min_overlap: int = _ADAPTER_MIN_OVERLAP,
+) -> bool:
+    """True when *seq* shares a contiguous run of >= *min_overlap* bp with any
+    adapter in *adapters* (or that adapter's reverse complement).
+
+    Containment of a window — rather than a full-length match — catches partial
+    read-through and adapter at any position within *seq*; both strands are tested
+    because a clip's/contig's orientation is arbitrary. Passing an empty
+    *adapters* disables the check (returns False), so callers can gate the whole
+    filter on a single config flag without branching.
+    """
+    s = seq.upper()
+    if len(s) < min_overlap:
+        return False
+    for adapter in adapters:
+        ref = adapter.upper()
+        for oriented in (ref, _revcomp(ref)):
+            for i in range(len(oriented) - min_overlap + 1):
+                if oriented[i : i + min_overlap] in s:
+                    return True
+    return False
 
 
 def _variants(motif: str, max_mismatches: int) -> set[str]:
