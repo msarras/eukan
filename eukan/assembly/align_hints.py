@@ -22,12 +22,14 @@ from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from eukan.assembly.sl_depletion import is_adapter
 from eukan.infra.artifacts import Artifact
 from eukan.infra.logging import get_logger
 from eukan.infra.runner import run_cmd
 from eukan.infra.utils import concat_files
 
 if TYPE_CHECKING:
+    from eukan.assembly.bam_diagnostic import TransSplicingCall
     from eukan.assembly.polya import PolyAStats
 
 log = get_logger(__name__)
@@ -187,6 +189,46 @@ def analyze_splice_sites(sj_file: Path, genome: Path, wd: Path) -> None:
         )
 
 
+def _log_trans_splicing_verdict(ts: TransSplicingCall) -> None:
+    """Log the trans-splicing verdict, flagging when the dominant soft-clip motif
+    is actually residual sequencing adapter rather than a genuine spliced leader.
+
+    Reads aren't adapter-trimmed upstream, so Illumina/Nextera read-through can be
+    the dominant soft-clip cluster and masquerade as trans-splicing. Surfacing it
+    here (in the soft-clip analysis) tells the user to adapter-trim rather than
+    trust a phantom spliced leader; SL detection separately excludes it.
+    """
+    label = ts.top_non_trivial_cluster_consensus or ts.top_non_trivial_cluster_key
+    if label and (
+        is_adapter(ts.top_non_trivial_cluster_consensus)
+        or is_adapter(ts.top_non_trivial_cluster_key)
+    ):
+        note = (
+            f"; the {ts.call} trans-splicing signal is attributable to it"
+            if ts.call in ("STRONG", "MODERATE")
+            else ""
+        )
+        log.warning(
+            "Soft-clip analysis: the dominant soft-clip motif %s matches a known "
+            "sequencing adapter%s. This is residual adapter read-through, not a "
+            "spliced leader; adapter-trim the reads before assembly. SL detection "
+            "excludes it by default (--no-sl-adapter-filter to override).",
+            label, note,
+        )
+        return
+    if ts.call in ("STRONG", "MODERATE"):
+        log.warning(
+            "Trans-splicing signal %s: top motif %s spans %d loci (%d reads). "
+            "Reads may need splice-leader trimming before annotation.",
+            ts.call,
+            label,
+            ts.top_non_trivial_cluster_n_loci,
+            ts.top_non_trivial_cluster_n_reads,
+        )
+    else:
+        log.info("Trans-splicing signal: ABSENT")
+
+
 def run_softclip_diagnostic(bam: Path, genome: Path, wd: Path) -> None:
     """Walk the aligner BAM for soft-clip + intron motifs and log a verdict.
 
@@ -235,19 +277,7 @@ def run_softclip_diagnostic(bam: Path, genome: Path, wd: Path) -> None:
     write_polya_section(wd, "reads", stats_to_dict(report.polya))
     _log_read_polya(report.polya, bam.name)
 
-    ts = verdict.trans_splicing
-    if ts.call in ("STRONG", "MODERATE"):
-        sl_label = ts.top_non_trivial_cluster_consensus or ts.top_non_trivial_cluster_key
-        log.warning(
-            "Trans-splicing signal %s: top motif %s spans %d loci (%d reads). "
-            "Reads may need splice-leader trimming before annotation.",
-            ts.call,
-            sl_label,
-            ts.top_non_trivial_cluster_n_loci,
-            ts.top_non_trivial_cluster_n_reads,
-        )
-    else:
-        log.info("Trans-splicing signal: ABSENT")
+    _log_trans_splicing_verdict(verdict.trans_splicing)
 
     nc = verdict.non_canonical_splice
     if nc.call in ("EXTENSIVE", "MODERATE"):
