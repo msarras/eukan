@@ -421,8 +421,7 @@ def _log_mapping_rate(wd: Path) -> None:
     total_pct = unique_pct + multi_pct
     if total_pct < 75:
         log.warning(
-            "Low read mapping rate: %.1f%% (%.1f%% unique, %.1f%% multi) "
-            "— check genome/reads compatibility",
+            "Detected low read mapping rate: %.1f%% (%.1f%% unique, %.1f%% multi)",
             total_pct, unique_pct, multi_pct,
         )
     else:
