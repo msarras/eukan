@@ -8,6 +8,7 @@ from pathlib import Path
 from eukan.assembly.combinr import run_combinr
 from eukan.assembly.defuse import run_defuse
 from eukan.assembly.jaccard import run_jaccard
+from eukan.assembly.max_intron import run_max_intron_split
 from eukan.assembly.segemehl import map_reads_segemehl
 from eukan.assembly.sl_acceptors import detect_sl_acceptors
 from eukan.assembly.sl_cut import run_sl_cut
@@ -73,9 +74,9 @@ def _defuse_inputs(config: AssemblyConfig) -> list[Path]:
     return paths
 
 
-def _sl_cut_inputs(config: AssemblyConfig) -> list[Path]:
-    # Per track, sl_cut resolves defuse > stranded > raw genome GFF3, plus the SL
-    # acceptor sites. Fingerprint all candidates so any upstream change re-runs it.
+def _max_intron_split_inputs(config: AssemblyConfig) -> list[Path]:
+    # Per track, max_intron_split resolves defuse > stranded > raw genome GFF3.
+    # Fingerprint all candidates so any upstream change (strand_correct/defuse) re-runs it.
     from eukan.assembly.tracks import mapped_transcript_stems
 
     wd = config.work_dir
@@ -86,6 +87,17 @@ def _sl_cut_inputs(config: AssemblyConfig) -> list[Path]:
             wd / f"{stem}.stranded.gff3",
             wd / f"{stem}.gff3",
         ]
+    return paths
+
+
+def _sl_cut_inputs(config: AssemblyConfig) -> list[Path]:
+    # sl_cut reads each track's max-intron-split models plus the SL acceptor sites.
+    from eukan.assembly.tracks import mapped_transcript_stems
+
+    wd = config.work_dir
+    paths: list[Path] = [
+        wd / f"{stem}.maxintron.gff3" for stem in mapped_transcript_stems()
+    ]
     paths.append(wd / Artifact.SL_ACCEPTORS.value)
     return paths
 
@@ -98,14 +110,20 @@ def _combinr_inputs(config: AssemblyConfig) -> list[Path]:
 
 # Scalar (non-file) inputs folded into a step's resume fingerprint, so changing the
 # value re-runs the step even when its input files are byte-identical. ``-M`` is
-# enforced post-mapping (StringTie reads a bounded BAM; sl_cut splits models;
-# combinr passes --max-intron), so tightening it must re-run exactly those steps —
-# but NOT the read/transcript mappers (segemehl ignores --max-intron natively, so a
-# scalar there would force a multi-hour re-map for an identical BAM).
+# enforced post-mapping (StringTie reads a bounded BAM; max_intron_split splits
+# models; combinr passes --max-intron), so tightening it must re-run exactly those
+# steps — but NOT the read/transcript mappers (segemehl ignores --max-intron
+# natively, so a scalar there would force a multi-hour re-map for an identical BAM).
 
 
-def _max_intron_scalar(config: AssemblyConfig) -> list[str]:
-    return [f"max_intron_len={config.max_intron_len}"]
+def _max_intron_split_scalars(config: AssemblyConfig) -> list[str]:
+    # max_intron_split hard-imposes -M on the transcript models, and min_sl_fragment
+    # gates the tiny-fragment drop; changing either re-runs it (and cascades to
+    # sl_cut/combinr). Its declared output makes this fingerprint live on resume.
+    return [
+        f"max_intron_len={config.max_intron_len}",
+        f"min_sl_fragment={config.min_sl_fragment}",
+    ]
 
 
 def _combinr_scalars(config: AssemblyConfig) -> list[str]:
@@ -118,10 +136,7 @@ def _combinr_scalars(config: AssemblyConfig) -> list[str]:
 
 
 def _sl_cut_scalars(config: AssemblyConfig) -> list[str]:
-    return [
-        f"max_intron_len={config.max_intron_len}",
-        f"min_sl_fragment={config.min_sl_fragment}",
-    ]
+    return [f"min_sl_fragment={config.min_sl_fragment}"]
 
 
 def _defuse_scalars(config: AssemblyConfig) -> list[str]:
@@ -154,7 +169,8 @@ def _aligner_step(aligner: str) -> StepSpec:
 
 def _steps_for(aligner: str) -> list[StepSpec]:
     """Assembly steps: <aligner> → trinity (de novo + genome-guided) → jaccard
-    → map_transcripts → strand_correct → defuse → sl_detect → sl_cut → combinr."""
+    → map_transcripts → strand_correct → defuse → max_intron_split → sl_detect
+    → sl_cut → combinr."""
     return [
         _aligner_step(aligner),
         # Trinity assembles both de novo and genome-guided transcript FASTAs;
@@ -193,9 +209,20 @@ def _steps_for(aligner: str) -> list[StepSpec]:
             "defuse", run_defuse, "trinity-denovo.genome.defuse.gff3", "--run-defuse",
             inputs=_defuse_inputs, scalars=_defuse_scalars,
         ),
-        # sl_detect/sl_cut have no declared output: with no SL signal sl_detect
-        # writes a header-only sl_acceptors.gff3 (zero features) and sl_cut is a
-        # pass-through, so stale-output GFF validation must not fire on either.
+        # Max-intron split: strand-agnostic, SL-independent sanitization that breaks
+        # any model carrying an intron > -M into separate genes (the de novo segemehl
+        # path has no native intron bound). Always writes <track>.maxintron.gff3
+        # (copy-through when nothing is cut), so — like defuse — it declares an output
+        # + scalars for precise resume: a changed -M re-runs it (and cascades on).
+        StepSpec(
+            "max_intron_split", run_max_intron_split,
+            "trinity-denovo.genome.maxintron.gff3", "--run-max-intron-split",
+            inputs=_max_intron_split_inputs, scalars=_max_intron_split_scalars,
+        ),
+        # No declared output for sl_detect/sl_cut: with no SL signal sl_detect writes a
+        # header-only sl_acceptors.gff3 (zero features), and sl_cut may legitimately
+        # write nothing for a track with no models (per-stem skip), so it always
+        # re-runs on resume — its scalar fingerprint is thus inert but kept for intent.
         StepSpec(
             "sl_detect", detect_sl_acceptors, None, "--run-sl-detect",
             inputs=_sl_detect_inputs,
@@ -226,11 +253,12 @@ _DOWNSTREAM: dict[str, tuple[str, ...]] = {
     # cascades on to strand_correct etc.).
     "jaccard": ("map_transcripts",),
     "map_transcripts": ("strand_correct", "sl_detect"),
-    # strand_correct now feeds defuse, which feeds sl_cut. When defuse is disabled it
-    # is skipped but stays in the cascade, so the transitive closure still reaches
-    # sl_cut (which falls back to the stranded models).
+    # strand_correct feeds defuse, which feeds max_intron_split, which feeds sl_cut.
+    # When defuse is disabled it is skipped but stays in the cascade, so the transitive
+    # closure still reaches max_intron_split (which falls back to the stranded models).
     "strand_correct": ("defuse",),
-    "defuse": ("sl_cut",),
+    "defuse": ("max_intron_split",),
+    "max_intron_split": ("sl_cut",),
     "sl_detect": ("sl_cut",),
     "sl_cut": ("combinr",),
 }
@@ -258,6 +286,7 @@ def force_steps_from_run_flags(
     run_map_transcripts: bool = False,
     run_strand_correct: bool = False,
     run_defuse: bool = False,
+    run_max_intron_split: bool = False,
     run_sl_detect: bool = False,
     run_sl_cut: bool = False,
     run_combinr: bool = False,
@@ -268,9 +297,9 @@ def force_steps_from_run_flags(
     ``--force`` re-runs every step. An individual ``--run-X`` re-runs that step
     *and every downstream step that consumes its output* (``_DOWNSTREAM``): e.g.
     ``--run-map-transcripts`` re-maps the Trinity transcripts and then re-runs
-    strand_correct, sl_detect, sl_cut, and combinr, which read the new BAM
-    (directly or transitively). The inactive aligner's flag is a harmless no-op.
-    Returns keys in pipeline order.
+    strand_correct, defuse, max_intron_split, sl_detect, sl_cut, and combinr, which
+    read the new BAM (directly or transitively). The inactive aligner's flag is a
+    harmless no-op. Returns keys in pipeline order.
     """
     steps = _steps_for(aligner)
     valid = {s.name for s in steps}
@@ -279,6 +308,7 @@ def force_steps_from_run_flags(
         "jaccard": run_jaccard,
         "map_transcripts": run_map_transcripts,
         "strand_correct": run_strand_correct, "defuse": run_defuse,
+        "max_intron_split": run_max_intron_split,
         "sl_detect": run_sl_detect, "sl_cut": run_sl_cut, "combinr": run_combinr,
     }
     selected = {name for name, on in flags.items() if on and name in valid}

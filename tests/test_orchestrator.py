@@ -112,7 +112,7 @@ class TestAssemblyForceStepsFromRunFlags:
     _ALL_KEYS: ClassVar[list[str]] = [
         "assembly/star", "assembly/trinity",
         "assembly/jaccard", "assembly/map_transcripts",
-        "assembly/strand_correct", "assembly/defuse",
+        "assembly/strand_correct", "assembly/defuse", "assembly/max_intron_split",
         "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
     ]
 
@@ -136,14 +136,15 @@ class TestAssemblyForceStepsFromRunFlags:
     def test_run_trinity_cascades_through_transcript_chain(self):
         """Re-assembling Trinity (both de novo + genome-guided FASTAs) invalidates the
         whole downstream transcript chain: jaccard re-clips → map_transcripts re-maps →
-        strand_correct/defuse/sl_detect/sl_cut/combinr all re-run."""
+        strand_correct/defuse/max_intron_split/sl_detect/sl_cut/combinr all re-run."""
         assert assembly_force_steps_from_run_flags(run_trinity=True) == [
             "assembly/trinity", "assembly/jaccard", "assembly/map_transcripts",
-            "assembly/strand_correct", "assembly/defuse", "assembly/sl_detect",
-            "assembly/sl_cut", "assembly/combinr",
+            "assembly/strand_correct", "assembly/defuse", "assembly/max_intron_split",
+            "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
         ]
 
     def test_run_sl_steps_cascade_downstream(self):
+        # max_intron_split is UPSTREAM of the SL steps, so it does not appear here.
         assert assembly_force_steps_from_run_flags(run_sl_detect=True) == [
             "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr"
         ]
@@ -151,22 +152,29 @@ class TestAssemblyForceStepsFromRunFlags:
             "assembly/sl_cut", "assembly/combinr"
         ]
 
-    def test_run_strand_correct_cascades_downstream(self):
-        assert assembly_force_steps_from_run_flags(run_strand_correct=True) == [
-            "assembly/strand_correct", "assembly/defuse", "assembly/sl_cut",
-            "assembly/combinr",
+    def test_run_max_intron_split_cascades_downstream(self):
+        assert assembly_force_steps_from_run_flags(run_max_intron_split=True) == [
+            "assembly/max_intron_split", "assembly/sl_cut", "assembly/combinr"
         ]
 
-    def test_run_defuse_cascades_to_sl_cut_and_combinr(self):
+    def test_run_strand_correct_cascades_downstream(self):
+        assert assembly_force_steps_from_run_flags(run_strand_correct=True) == [
+            "assembly/strand_correct", "assembly/defuse", "assembly/max_intron_split",
+            "assembly/sl_cut", "assembly/combinr",
+        ]
+
+    def test_run_defuse_cascades_downstream(self):
         assert assembly_force_steps_from_run_flags(run_defuse=True) == [
-            "assembly/defuse", "assembly/sl_cut", "assembly/combinr"
+            "assembly/defuse", "assembly/max_intron_split", "assembly/sl_cut",
+            "assembly/combinr",
         ]
 
     def test_run_map_transcripts_cascades_to_sl_and_combinr(self):
         """The new spliced BAM invalidates every step that reads it, directly or not."""
         assert assembly_force_steps_from_run_flags(run_map_transcripts=True) == [
             "assembly/map_transcripts", "assembly/strand_correct", "assembly/defuse",
-            "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
+            "assembly/max_intron_split", "assembly/sl_detect", "assembly/sl_cut",
+            "assembly/combinr",
         ]
 
     def test_run_star_with_force_takes_run_flag(self):
@@ -185,7 +193,8 @@ class TestAssemblyForceStepsFromRunFlags:
         ) == [
             "assembly/segemehl", "assembly/trinity", "assembly/jaccard",
             "assembly/map_transcripts", "assembly/strand_correct", "assembly/defuse",
-            "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
+            "assembly/max_intron_split", "assembly/sl_detect", "assembly/sl_cut",
+            "assembly/combinr",
         ]
 
     def test_multiple_run_flags(self):
@@ -424,10 +433,18 @@ class TestAssemblyStepScalars:
         assert "max_intron_len=5000" in scalars
         assert any(s.startswith("combinr_stringent_overlap=") for s in scalars)
 
-    def test_sl_cut_tracks_max_intron_and_min_fragment(self, tmp_path):
-        scalars = self._scalars(tmp_path, "sl_cut")
+    def test_max_intron_split_tracks_max_intron_and_min_fragment(self, tmp_path):
+        # The model-level -M enforcement lives here now (a declared output makes the
+        # scalar live), so changing -M re-runs max_intron_split and cascades on.
+        scalars = self._scalars(tmp_path, "max_intron_split")
         assert "max_intron_len=5000" in scalars
         assert any(s.startswith("min_sl_fragment=") for s in scalars)
+
+    def test_sl_cut_tracks_min_fragment_not_max_intron(self, tmp_path):
+        # sl_cut no longer owns the max-intron split, so it tracks only min_sl_fragment.
+        scalars = self._scalars(tmp_path, "sl_cut")
+        assert any(s.startswith("min_sl_fragment=") for s in scalars)
+        assert not any(s.startswith("max_intron_len=") for s in scalars)
 
     def test_defuse_tracks_its_knobs(self, tmp_path):
         scalars = self._scalars(tmp_path, "defuse")

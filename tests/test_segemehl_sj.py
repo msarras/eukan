@@ -157,12 +157,12 @@ def test_steps_for_selects_aligner():
     # Trinity (both de novo + genome-guided) replaces the old rnaspades +
     # stringtie steps; both Trinity FASTAs are jaccard-clipped then mapped.
     assert [s.name for s in star] == [
-        "star", "trinity", "jaccard",
-        "map_transcripts", "strand_correct", "defuse", "sl_detect", "sl_cut", "combinr",
+        "star", "trinity", "jaccard", "map_transcripts", "strand_correct", "defuse",
+        "max_intron_split", "sl_detect", "sl_cut", "combinr",
     ]
     assert [s.name for s in seg] == [
-        "segemehl", "trinity", "jaccard",
-        "map_transcripts", "strand_correct", "defuse", "sl_detect", "sl_cut", "combinr",
+        "segemehl", "trinity", "jaccard", "map_transcripts", "strand_correct", "defuse",
+        "max_intron_split", "sl_detect", "sl_cut", "combinr",
     ]
     assert seg[0].output == "segemehl_Aligned.sortedByCoord.out.bam"
 
@@ -175,19 +175,21 @@ def test_force_steps_respects_active_aligner():
     assert force_steps_from_run_flags(aligner="star", run_star=True) == [
         "assembly/star", "assembly/trinity", "assembly/jaccard",
         "assembly/map_transcripts", "assembly/strand_correct", "assembly/defuse",
-        "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
+        "assembly/max_intron_split", "assembly/sl_detect", "assembly/sl_cut",
+        "assembly/combinr",
     ]
     assert force_steps_from_run_flags(aligner="segemehl", run_segemehl=True) == [
         "assembly/segemehl", "assembly/trinity", "assembly/jaccard",
         "assembly/map_transcripts", "assembly/strand_correct", "assembly/defuse",
-        "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
+        "assembly/max_intron_split", "assembly/sl_detect", "assembly/sl_cut",
+        "assembly/combinr",
     ]
     # --force re-runs the active aligner's whole chain.
     assert force_steps_from_run_flags(aligner="segemehl", force=True) == [
         "assembly/segemehl", "assembly/trinity",
         "assembly/jaccard", "assembly/map_transcripts",
-        "assembly/strand_correct", "assembly/defuse", "assembly/sl_detect",
-        "assembly/sl_cut", "assembly/combinr",
+        "assembly/strand_correct", "assembly/defuse", "assembly/max_intron_split",
+        "assembly/sl_detect", "assembly/sl_cut", "assembly/combinr",
     ]
 
 

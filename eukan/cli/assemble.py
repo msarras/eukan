@@ -66,10 +66,11 @@ from eukan.cli._framework import (
 @optgroup.option(
     "--max-intron", "-M", type=int, default=5000, show_default=True,
     help="Maximum intron length, hard-imposed: transcript models are split at any "
-    "longer intron (sl_cut) and combinr enforces it, and Trinity genome-guided "
-    "uses it as --genome_guided_max_intron. Changing it on a resumed run re-runs "
-    "sl_cut/combinr automatically; recovering longer introns from the assembly or "
-    "mapping also needs --run-trinity/--run-map-transcripts.",
+    "longer intron (the max_intron_split step) and combinr enforces it, and Trinity "
+    "genome-guided uses it as --genome_guided_max_intron. Changing it on a resumed "
+    "run re-runs max_intron_split/combinr automatically; recovering longer introns "
+    "from the assembly or mapping also needs --run-trinity/--run-map-transcripts. "
+    "Set 0 to disable the model split.",
 )
 @optgroup.option("--phred", type=click.Choice(["33", "64"]), default="33", show_default=True, help="Phred quality score.")
 @optgroup.option(
@@ -186,6 +187,10 @@ from eukan.cli._framework import (
     help="Force re-run homology-based transcript de-fusion.",
 )
 @optgroup.option(
+    "--run-max-intron-split", is_flag=True,
+    help="Force re-run the max-intron split of transcript models.",
+)
+@optgroup.option(
     "--run-sl-detect", is_flag=True,
     help="Force re-run SL trans-splice acceptor detection.",
 )
@@ -217,6 +222,7 @@ def assemble(
     run_map_transcripts: bool,
     run_strand_correct: bool,
     run_defuse: bool,
+    run_max_intron_split: bool,
     run_sl_detect: bool,
     run_sl_cut: bool,
     run_combinr: bool,
@@ -313,6 +319,7 @@ def assemble(
         run_trinity=run_trinity, run_jaccard=run_jaccard,
         run_map_transcripts=run_map_transcripts,
         run_strand_correct=run_strand_correct, run_defuse=run_defuse,
+        run_max_intron_split=run_max_intron_split,
         run_sl_detect=run_sl_detect, run_sl_cut=run_sl_cut,
         run_combinr=run_combinr, force=force,
     )

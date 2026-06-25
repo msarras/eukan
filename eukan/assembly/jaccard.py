@@ -726,6 +726,55 @@ def _write_transcript_models_gff3(models: list[_Tx], out_gff: str | Path) -> Non
                 )
 
 
+def _write_tx(fh, tx: _Tx) -> None:
+    """Write one transcript as gene>mRNA>exon GFF3 (combinr-ingestible).
+
+    The streaming, single-transcript twin of :func:`_write_transcript_models_gff3`
+    (same per-model format), so output round-trips through
+    :func:`_parse_transcript_models` / :func:`_iter_transcript_models`. Used by the
+    max-intron split and the genomic SL cut, which stream one model at a time.
+    """
+    gid, gstart, gend = f"{tx.tid}.gene", tx.exons[0][0], tx.exons[-1][1]
+    loc = f"{tx.chrom}\t{tx.source}"
+    fh.write(f"{loc}\tgene\t{gstart}\t{gend}\t.\t{tx.strand}\t.\tID={gid}\n")
+    fh.write(f"{loc}\tmRNA\t{gstart}\t{gend}\t.\t{tx.strand}\t.\tID={tx.tid};Parent={gid}\n")
+    for k, (s, e) in enumerate(tx.exons, start=1):
+        fh.write(
+            f"{loc}\texon\t{s}\t{e}\t.\t{tx.strand}\t.\tID={tx.tid}.exon{k};Parent={tx.tid}\n"
+        )
+
+
+def _iter_transcript_models(gff: str | Path) -> Iterator[_Tx]:
+    """Stream transcript models from a GFF3/GTF, one ``_Tx`` at a time.
+
+    The streaming twin of :func:`_parse_transcript_models`. Groups consecutive
+    ``exon`` rows by transcript id (``Parent=`` / ``transcript_id``), assuming each
+    transcript's exon rows are contiguous — true for StringTie GTF and the
+    BAM-derived GFF3. Streaming keeps memory bounded on a genome-wide model set.
+    """
+    cur: _Tx | None = None
+    with open(gff) as fh:
+        for line in fh:
+            if line.startswith("#") or not line.strip():
+                continue
+            cols = line.rstrip("\n").split("\t")
+            if len(cols) < 9 or cols[2] != "exon":
+                continue
+            attrs = _parse_attrs(cols[8])
+            tid = attrs.get("Parent") or attrs.get("transcript_id")
+            if not tid:
+                continue
+            if cur is None or cur.tid != tid:
+                if cur is not None and cur.exons:
+                    cur.exons.sort()
+                    yield cur
+                cur = _Tx(tid, cols[0], cols[6], cols[1])
+            cur.exons.append((int(cols[3]), int(cols[4])))
+    if cur is not None and cur.exons:
+        cur.exons.sort()
+        yield cur
+
+
 def _split_models_at_clips(
     gff: str | Path, clip_map: dict[str, list[int]], min_segment: int
 ) -> tuple[list[_Tx], int]:
