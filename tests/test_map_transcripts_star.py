@@ -110,6 +110,37 @@ def test_segemehl_fallback_on_zero_map(tmp_path, monkeypatch):
     assert called == ["trinity-denovo.genome.bam"]
 
 
+def test_segemehl_fallback_on_parser_breakage(tmp_path, monkeypatch):
+    """A short-read STAR build standing in for STARlong mis-parses a multi-record FASTA
+    into a single read; that triggers the segemehl fallback even though the one read maps.
+    """
+    # 10 transcripts, but STARlong's Log.final.out will report only 1 input read.
+    (tmp_path / "trinity-gg.fasta").write_text(
+        "".join(f">t{i}\nACGTACGTACGT\n" for i in range(10))
+    )
+
+    def fake(cmd, **kw):
+        if cmd[0] in ("STAR", "STARlong") and "--outFileNamePrefix" in cmd:
+            p = cmd[cmd.index("--outFileNamePrefix") + 1]
+            (tmp_path / f"{p}Aligned.sortedByCoord.out.bam").write_text("bam")
+            (tmp_path / f"{p}Log.final.out").write_text(
+                "                          Number of input reads |\t1\n"
+            )
+
+    monkeypatch.setattr(star, "run_cmd", fake)
+    monkeypatch.setattr(star, "_count_mapped", lambda _p: 1)  # the single read "mapped"
+
+    called: list[str] = []
+    monkeypatch.setattr(
+        segemehl, "map_one_transcript_set_segemehl",
+        lambda config, query, out_bam: called.append(out_bam),
+    )
+
+    star.map_transcripts_star(_config(tmp_path))
+
+    assert called == ["trinity-gg.genome.bam"]
+
+
 def test_no_assemblies_is_noop(tmp_path, monkeypatch):
     cmds = _mock(monkeypatch, tmp_path)
     star.map_transcripts_star(_config(tmp_path))
