@@ -31,8 +31,8 @@ def mapped_transcript_stems() -> tuple[str, ...]:
 
     Derived from ``segemehl._TRANSCRIPT_SETS`` — e.g.
     ``("trinity-denovo.genome", "trinity-gg.genome")``. Append a variant suffix
-    (``.gff3``, ``.stranded.gff3``, ``.defuse.gff3``, ``.sl_cut.gff3``) to name
-    that track's file.
+    (``.gff3``, ``.stranded.gff3``, ``.defuse.gff3``, ``.maxintron.gff3``,
+    ``.cut.gff3``) to name that track's file.
     """
     # "trinity-denovo.genome.bam" -> "trinity-denovo.genome"
     return tuple(bam[: -len(".bam")] for _, bam in _TRANSCRIPT_SETS)

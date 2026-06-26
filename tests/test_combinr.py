@@ -131,8 +131,8 @@ def test_combinr_path_override(tmp_path, monkeypatch):
 # --- run_combinr integration (combinr mocked) ------------------------------
 
 _CUT_MODELS = (
-    "trinity-denovo.genome.sl_cut.gff3",
-    "trinity-gg.genome.sl_cut.gff3",
+    "trinity-denovo.genome.cut.gff3",
+    "trinity-gg.genome.cut.gff3",
 )
 
 
@@ -156,7 +156,7 @@ def test_run_combinr_consolidates_cut_models(tmp_path, monkeypatch):
 
     run_combinr(_config(tmp_path))
 
-    # single combinr run over the SL-cut models (both Trinity tracks)
+    # single combinr run over the cut models (both Trinity tracks)
     assert len(calls) == 1
     assert calls[0] == set(_CUT_MODELS)
     assert (tmp_path / Artifact.NR_TRANSCRIPTS_GFF).exists()
@@ -167,13 +167,13 @@ def test_run_combinr_consolidates_cut_models(tmp_path, monkeypatch):
 def test_run_combinr_skips_empty_cut_models(tmp_path, monkeypatch):
     _setup_run(tmp_path)
     # An empty (zero-byte) cut model is ignored, not fed to combinr.
-    (tmp_path / "trinity-gg.genome.sl_cut.gff3").write_text("")
+    (tmp_path / "trinity-gg.genome.cut.gff3").write_text("")
     calls: list[set] = []
     monkeypatch.setattr(combinr, "_run_combinr_assemble", _fake_assemble(calls))
 
     run_combinr(_config(tmp_path))
 
-    assert calls[0] == {"trinity-denovo.genome.sl_cut.gff3"}
+    assert calls[0] == {"trinity-denovo.genome.cut.gff3"}
 
 
 def test_run_combinr_errors_without_inputs(tmp_path, monkeypatch):

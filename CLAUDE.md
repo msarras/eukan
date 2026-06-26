@@ -118,8 +118,9 @@ eukan/
 │   ├── jaccard.py      # In-house jaccard fusion-clip (replaces Trinity --jaccard_clip; STAR-based, tunable)
 │   ├── strand_correction.py # Homology-calibrated per-transcript splice-strand flip (diamond blastx, opt-in --uniprot)
 │   ├── defuse.py       # Homology-grounded chimera splitting (opt-in --defuse + --uniprot)
+│   ├── max_intron.py   # Strand-agnostic max-intron split of transcript models (SL-independent; runs before sl_cut)
 │   ├── sl_acceptors.py # Spliced-leader trans-splice acceptor detection (read-side + de novo)
-│   ├── sl_cut.py       # Genomic SL cut + max-intron split of transcript models
+│   ├── sl_cut.py       # Genomic SL cut of transcript models at trans-splice acceptors → {stem}.cut.gff3
 │   ├── polya.py        # Poly-A characterization + unmapped de-novo transcript output
 │   ├── combinr.py      # combinr-assemble consolidation → nr_transcripts.{fasta,gff3} + hints_rnaseq.gff
 │   ├── rnaspades.py    # DORMANT: rnaSPAdes de novo (kept, unwired — Trinity replaced it)

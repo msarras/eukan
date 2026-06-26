@@ -172,7 +172,7 @@ def _source_of(gff3_text):
 
 def test_run_sl_cut_reads_maxintron_models(tmp_path):
     # run_sl_cut reads each track's max-intron-split models ({stem}.maxintron.gff3,
-    # always written by the max_intron_split step) and writes {stem}.sl_cut.gff3.
+    # always written by the max_intron_split step) and writes {stem}.cut.gff3.
     denovo, gg = "trinity-denovo.genome", "trinity-gg.genome"
     (tmp_path / f"{denovo}.maxintron.gff3").write_text(_track_models_gff3("maxintron"))
     (tmp_path / f"{gg}.maxintron.gff3").write_text(_track_models_gff3("maxintron"))
@@ -181,7 +181,7 @@ def test_run_sl_cut_reads_maxintron_models(tmp_path):
     run_sl_cut(config)  # no SL acceptors -> passthrough copy
 
     for stem in (denovo, gg):
-        out = (tmp_path / f"{stem}.sl_cut.gff3").read_text()
+        out = (tmp_path / f"{stem}.cut.gff3").read_text()
         assert _source_of(out) == "maxintron"
         assert out.count("\tmRNA\t") == 2
         assert "ID=A;" in out and "ID=B;" in out
@@ -196,5 +196,5 @@ def test_run_sl_cut_skips_track_with_no_maxintron(tmp_path):
     config = AssemblyConfig(genome=tmp_path / "g.fa", work_dir=tmp_path, num_cpu=1)
     run_sl_cut(config)
 
-    assert (tmp_path / f"{denovo}.sl_cut.gff3").exists()
-    assert not (tmp_path / f"{gg}.sl_cut.gff3").exists()
+    assert (tmp_path / f"{denovo}.cut.gff3").exists()
+    assert not (tmp_path / f"{gg}.cut.gff3").exists()

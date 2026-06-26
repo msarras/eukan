@@ -155,7 +155,7 @@ def test_two_pass_geometry_matches_union(tmp_path):
     sites = [AcceptorSite("chr1", 60, "+", 5, ("reads",))]
     maxi = tmp_path / "t.maxintron.gff3"
     cut_models_at_max_intron(gff, maxi, min_segment=25, max_intron_len=5000)
-    cut = tmp_path / "t.sl_cut.gff3"
+    cut = tmp_path / "t.cut.gff3"
     cut_models_at_sl(maxi, sites, cut, min_segment=25)
     geometry = {tuple(m.exons) for m in _parse_transcript_models(cut)}
     assert geometry == {

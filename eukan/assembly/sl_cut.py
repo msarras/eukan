@@ -213,15 +213,15 @@ def cut_models_at_sl(
 
 
 def run_sl_cut(config: AssemblyConfig) -> None:
-    """Cut transcript models at SL trans-splice acceptors → ``{stem}.sl_cut.gff3``.
+    """Cut transcript models at SL trans-splice acceptors → ``{stem}.cut.gff3``.
 
     Reads each track's max-intron-split models (``{stem}.maxintron.gff3``, always
     written by :mod:`eukan.assembly.max_intron`) and cuts every transcript whose
     exons contain a same-strand SL acceptor so the mature mRNA begins at the
     acceptor. With no SL signal ``sl_acceptors.gff3`` is header-only, so this is a
-    pass-through copy. Outputs are the genome-coordinate GFF3 ``combinr assemble``
-    ingests directly; the cut streams one transcript at a time so a genome-wide
-    model set stays bounded.
+    pass-through copy (and stays silent — sl_detect already reported the no-op).
+    Outputs are the genome-coordinate GFF3 ``combinr assemble`` ingests directly;
+    the cut streams one transcript at a time so a genome-wide model set stays bounded.
     """
     wd = config.work_dir
     acc_path = wd / Artifact.SL_ACCEPTORS.value
@@ -232,6 +232,9 @@ def run_sl_cut(config: AssemblyConfig) -> None:
         src = wd / f"{stem}.maxintron.gff3"
         if not src.exists():
             continue
-        out = wd / f"{stem}.sl_cut.gff3"
+        out = wd / f"{stem}.cut.gff3"
         n_cut = cut_models_at_sl(src, sites, out, min_segment=min_segment)
-        log.info("SL cut %s -> %s (%d transcripts cut).", src.name, out.name, n_cut)
+        # Only narrate when an SL signal actually drove a cut; a pass-through
+        # (no acceptors) would just repeat sl_detect's no-op line per track.
+        if sites:
+            log.info("SL cut %s -> %s (%d transcripts cut).", src.name, out.name, n_cut)

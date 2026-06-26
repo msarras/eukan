@@ -1,10 +1,10 @@
 """combinr transcript consolidation — the PASA replacement.
 
-Runs the external ``combinr assemble`` over the **SL-cut** transcript models
-(:mod:`eukan.assembly.sl_cut`) — the cut StringTie GTF and the cut de novo
-transcript→genome GFF3s — to build a non-redundant set of transcript models,
-then emits the same artifacts PASA produced so the annotation pipeline consumes
-them unchanged:
+Runs the external ``combinr assemble`` over the **cut** transcript models
+(``{stem}.cut.gff3`` from :mod:`eukan.assembly.sl_cut` — max-intron-split and,
+when an SL signal is present, SL-cut de novo transcript→genome GFF3s) to build a
+non-redundant set of transcript models, then emits the same artifacts PASA
+produced so the annotation pipeline consumes them unchanged:
 
 * ``nr_transcripts.gff3`` — flat ``exon`` features grouped by ``Parent`` (the
   EVM ``--transcript_alignments`` contract), source ``combinr-assembly``;
@@ -12,7 +12,7 @@ them unchanged:
 * ``hints_rnaseq.gff`` — transcript exon hints concatenated with the intron and
   coverage hints already written by the aligner step.
 
-All inputs are already in genome coordinates, jaccard-clipped, and SL-cut, so
+All inputs are already in genome coordinates, jaccard-clipped, and cut, so
 combinr simply consolidates them in one pass; ``combinr assemble`` auto-detects
 each input's format (GFF3/GTF/BAM) by extension.
 """
@@ -33,11 +33,13 @@ from eukan.settings import AssemblyConfig
 
 log = get_logger(__name__)
 
-# SL-cut transcript models from the sl_cut step (genome coordinates), one per
-# mapped Trinity track (de novo + genome-guided).
+# Cut transcript models from the sl_cut step (genome coordinates), one per mapped
+# Trinity track (de novo + genome-guided). Named generically (`.cut.gff3`) because
+# the file is a pass-through copy of the max-intron-split models when no SL signal
+# is present, so it is not always SL-cut.
 _CUT_MODELS = (
-    "trinity-denovo.genome.sl_cut.gff3",
-    "trinity-gg.genome.sl_cut.gff3",
+    "trinity-denovo.genome.cut.gff3",
+    "trinity-gg.genome.cut.gff3",
 )
 # Source token written into nr_transcripts.gff3; EVM's weights.txt picks this up
 # as the TRANSCRIPT evidence source (eukan/annotation/evidence.py::_first_source_token).
@@ -159,7 +161,7 @@ def run_combinr(config: AssemblyConfig) -> None:
     ]
     if not inputs:
         raise FileNotFoundError(
-            "No SL-cut transcript models found for combinr; run the sl_cut step first."
+            "No cut transcript models found for combinr; run the sl_cut step first."
         )
 
     all_gff = wd / "combinr_all.gff3"

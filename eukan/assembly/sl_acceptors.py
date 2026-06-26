@@ -228,13 +228,15 @@ def build_joint_consensus(
     adapters = _effective_adapters(config)
     read_motif = _read_verdict_consensus(config.work_dir, adapters)
     if read_motif:
-        log.info("SL consensus from read soft-clip verdict: %s", read_motif)
+        # Derivation detail only — the detection result line reports the consensus
+        # when acceptors are actually found, so this stays quiet on the no-SL path.
+        log.debug("SL consensus from read soft-clip verdict: %s", read_motif)
         return read_motif
     denovo_motif = _dominant_denovo_motif(
         denovo_bams, min_support=_MIN_DENOVO_SUPPORT, adapters=adapters
     )
     if denovo_motif:
-        log.info("SL consensus from de novo insertions (read verdict weak): %s", denovo_motif)
+        log.debug("SL consensus from de novo insertions (read verdict weak): %s", denovo_motif)
         return denovo_motif
     return None
 
@@ -367,6 +369,15 @@ def detect_sl_acceptors(config: AssemblyConfig) -> None:
 
     sites = _consolidate(raw, window=config.sl_cluster_window)
     _write_acceptors(sites, out)
+    if not sites:
+        # A candidate consensus existed but no acceptor sites passed; the SL cut
+        # will be a pass-through, so this is the only SL line on the no-SL path.
+        log.info(
+            "No spliced-leader acceptors detected (candidate consensus %s); "
+            "SL cut is a pass-through.",
+            consensus,
+        )
+        return
     log.info(
         "SL acceptor detection: %d sites from %d raw positions "
         "(consensus %s, detected on 3' core %s).",
