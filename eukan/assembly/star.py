@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import shutil
 from pathlib import Path
@@ -351,6 +352,28 @@ def _count_mapped(bam_path: Path) -> int:
         return bam.mapped
 
 
+def _count_fasta_records(path: Path) -> int:
+    """Number of sequences in a (optionally gzipped) FASTA."""
+    opener = gzip.open if _is_gzipped(path) else open
+    n = 0
+    with opener(path, "rt") as fh:
+        for line in fh:
+            if line.startswith(">"):
+                n += 1
+    return n
+
+
+def _star_input_reads(log_final: Path) -> int | None:
+    """Parse 'Number of input reads' from a STAR ``Log.final.out``; None if missing."""
+    try:
+        for line in log_final.read_text().splitlines():
+            if "Number of input reads" in line:
+                return int(line.split("|")[-1].strip())
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 def _star_map_one_transcript_set(
     config: AssemblyConfig, index_dir: Path, query: Path, out_bam: str, bam_suffix: str
 ) -> None:
@@ -397,8 +420,23 @@ def _star_map_one_transcript_set(
     if unmapped.exists():
         unmapped.rename(wd / f"{stem}.unmapped_transcripts.fasta")
 
-    if _count_mapped(final) == 0:
-        log.warning("STARlong mapped 0 records of %s; falling back to segemehl -S.", query.name)
+    # STARlong is sometimes a plain short-read STAR build (no -DLONG_READS — e.g. a
+    # bioconda SIMD variant that's a byte-identical copy of STAR), which mis-parses a
+    # multi-record transcript FASTA into a single truncated read, then "maps" that one
+    # read into a near-empty BAM. Detect that the run read far fewer reads than the FASTA
+    # holds (parser breakage), as well as a zero-mapped result, and fall back to
+    # segemehl -S, which maps long transcripts directly.
+    n_input = _count_fasta_records(query)
+    n_read = _star_input_reads(wd / f"{prefix}Log.final.out")
+    n_mapped = _count_mapped(final)
+    parser_broke = n_read is not None and n_input > 0 and n_read < n_input // 2
+    if parser_broke or n_mapped == 0:
+        log.warning(
+            "STARlong read %s of %d transcripts in %s and mapped %d; "
+            "falling back to segemehl -S.",
+            f"only {n_read}" if n_read is not None else "an unknown number",
+            n_input, query.name, n_mapped,
+        )
         final.unlink(missing_ok=True)
         (wd / f"{out_bam}.bai").unlink(missing_ok=True)
         map_one_transcript_set_segemehl(config, query, out_bam)
