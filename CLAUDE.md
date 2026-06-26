@@ -102,7 +102,7 @@ eukan/
 │   ├── augustus.py     # AUGUSTUS training and prediction
 │   ├── training.py     # Training-set construction shared across predictors
 │   ├── snap.py         # SNAP and CodingQuarry gene prediction
-│   ├── evidence.py     # Evidence-source role mapping + weights helpers (extracted from the old EVM driver)
+│   ├── evidence.py     # Evidence-source role mapping + weights helpers for the consensus engine
 │   ├── combinr_consensus.py # Consensus engine: external `combinr consensus` (weighted DP; folds in UTRs + alt isoforms)
 │   └── consensus.py    # Final model building: combinr consensus + ORF patch + prettification
 │
@@ -149,7 +149,7 @@ eukan/
 │
 └── data/               # Static data shipped with the package
     ├── tools.toml      # External-tool registry (versions, probe commands, env hints)
-    └── configs/        # AUGUSTUS config template (+ unused legacy PASA templates)
+    └── configs/        # AUGUSTUS config template
 ```
 
 ### Pipeline Flow
@@ -161,7 +161,7 @@ eukan/
    - `--spsp`: species-specific parameters via `make_eij.pl`/`make_ssp.pl` → spaln `-T` (experimental, uses separate `prot_align_ssp/` step dir)
 4. AUGUSTUS training and prediction using protein + RNA-seq hints — auto-allows non-canonical splice sites from STAR evidence (`splice_site_summary.json`); `--splice-permissive` lowers thresholds
 5. SNAP training and prediction (fungus/protist also runs CodingQuarry)
-6. Consensus model building, weighted by evidence type, via the external `combinr consensus` engine (EVM-style weighted DP), genetic-code aware, which folds UTRs and alternative isoforms in from transcript evidence — covering what EVM plus the separate PASA UTR step used to do together. Protein (`prot.gff3`, CDS-format) and transcript (`nr_transcripts.gff3`, flat exon) evidence are converted to `Target=` match chains; ab initio predictions and the weights file are reused as-is. Isoform-grouping stringency is tunable via `--combinr-stringent-overlap`; the binary is resolved via `--combinr-path` or PATH.
+6. Consensus model building, weighted by evidence type, via the external `combinr consensus` engine (weighted DP), genetic-code aware, which folds UTRs and alternative isoforms in from transcript evidence in a single pass. Protein (`prot.gff3`, CDS-format) and transcript (`nr_transcripts.gff3`, flat exon) evidence are converted to `Target=` match chains; ab initio predictions and the weights file are reused as-is. Isoform-grouping stringency is tunable via `--combinr-stringent-overlap`; the binary is resolved via `--combinr-path` or PATH.
 7. Final GFF3 formatting with locus tags
 8. Optional functional annotation via `func-annot` (UniProt-or-KOfam plus Pfam, selected by `--homology-db`) → `final.mod.gff3`. KOfam mode is an adaptation of KofamKOALA: per-KO bit-score thresholds from `ko_list`, full vs domain score selection per KO, EC numbers parsed out of `[EC:…]` tags into a dedicated `ec_number=` GFF3 attribute, KEGG accessions emitted as `Dbxref=KEGG:K…`
 9. Optional `prep-submission` runs NCBI's table2asn validator over `final.mod.gff3` to produce a `.sqn` plus `.val/.dr/.stats` reports for iterative GFF3 refinement

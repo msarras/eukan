@@ -3,13 +3,12 @@
 The consensus engine. ``combinr consensus`` integrates weighted evidence — ab
 initio predictions, protein alignments, and transcript alignments — into one
 best-scoring coding model per locus, and folds UTRs and alternative isoforms in
-from the transcript evidence (via ``--alt-splice``), covering what EVM plus the
-separate PASA UTR step used to do together.
+from the transcript evidence (via ``--alt-splice``) in a single pass.
 
-The evidence is staged into the same ``evm_consensus_models`` step dir as EVM and
-written to ``consensus_models.gff3``, so the shared tail in
+The evidence is staged into the ``consensus_models`` step dir and written to
+``consensus_models.gff3``, so the shared tail in
 :func:`eukan.annotation.consensus.build_consensus_models` (ORF patch +
-prettification) is identical for both engines.
+prettification) consumes it directly.
 
 Input contract (verified against combinr's ``src/consensus/evidence.rs``):
 
@@ -105,9 +104,9 @@ def _stage_combinr_inputs(
 ) -> bool:
     """Stage gene_predictions.gff3, prot.match.gff3, transcripts.match.gff3, weights.txt.
 
-    Mirrors EVM's staging (same ab initio concatenation, same weight tokens via
-    the shared :data:`~eukan.annotation.evidence.EVIDENCE_ROLES`) so the engine
-    score identical evidence. The protein and transcript files are converted to
+    Uses the same ab initio concatenation and the same weight tokens (via the
+    shared :data:`~eukan.annotation.evidence.EVIDENCE_ROLES`) the consensus engine
+    scores. The protein and transcript files are converted to
     ``Target=`` match chains rather than symlinked. Returns ``True`` when
     transcript evidence was staged.
     """
@@ -154,8 +153,7 @@ def run_combinr_consensus(
     """Build consensus gene models with ``combinr consensus`` into ``consensus_models.gff3``.
 
     Transcript evidence (when present) enables ``--alt-splice`` so combinr emits
-    alternative isoforms with UTRs derived from the consensus CDS, replacing the
-    PASA UTR step on this path.
+    alternative isoforms with UTRs derived from the consensus CDS.
     """
     log.info("Running combinr consensus model building...")
     have_transcripts = _stage_combinr_inputs(config, sdir, evidence, transcripts)
@@ -175,7 +173,7 @@ def run_combinr_consensus(
         cmd += [
             "--transcript-alignments", "transcripts.match.gff3",
             "--alt-splice", "--events", "combinr.alt_splice_events.tsv",
-            # PASA --stringent_alignment_overlap for the isoform grouping; 0 = off.
+            # --stringent-overlap tunes the isoform grouping; 0 = off (any overlap).
             "--stringent-overlap", str(config.combinr_stringent_overlap),
         ]
 

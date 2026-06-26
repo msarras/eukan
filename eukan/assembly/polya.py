@@ -1,8 +1,8 @@
 """Poly-A / poly-T characterization of soft-clips and assembled transcripts.
 
 Standalone, SL-independent statistics on where poly-A tails surface in the
-assembly pipeline. PASA recommends trimming poly-A tails before its **pairwise**
-gmap/blat alignment, where an untrimmed tail forces terminal mismatches/insertions
+assembly pipeline. Tools that align transcripts **pairwise** (gmap/blat) recommend
+trimming poly-A tails first, where an untrimmed tail forces terminal mismatches/insertions
 and degrades the alignment. eukan instead maps with STAR/segemehl in ``Local``
 (soft-clip) mode, so a poly-A tail simply *soft-clips* rather than degrading the
 body alignment. This module quantifies that, so the choice can be revisited from

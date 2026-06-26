@@ -137,7 +137,7 @@ def _nr_gff(path: Path) -> Path:
 
 
 def test_stage_combinr_inputs_full(tmp_path):
-    sdir = tmp_path / "evm_consensus_models"
+    sdir = tmp_path / "consensus_models"
     sdir.mkdir()
     src = tmp_path / "src"
     src.mkdir()
@@ -163,7 +163,7 @@ def test_stage_combinr_inputs_full(tmp_path):
 
 
 def test_stage_combinr_inputs_without_transcripts(tmp_path):
-    sdir = tmp_path / "evm_consensus_models"
+    sdir = tmp_path / "consensus_models"
     sdir.mkdir()
     src = tmp_path / "src"
     src.mkdir()
@@ -187,7 +187,7 @@ def _capture_run_cmd(monkeypatch) -> list[tuple[list[str], dict]]:
 
 
 def test_run_combinr_consensus_command_with_transcripts(tmp_path, monkeypatch):
-    sdir = tmp_path / "evm_consensus_models"
+    sdir = tmp_path / "consensus_models"
     sdir.mkdir()
     src = tmp_path / "src"
     src.mkdir()
@@ -212,7 +212,7 @@ def test_run_combinr_consensus_command_with_transcripts(tmp_path, monkeypatch):
 
 
 def test_run_combinr_consensus_passes_stringent_overlap(tmp_path, monkeypatch):
-    sdir = tmp_path / "evm_consensus_models"
+    sdir = tmp_path / "consensus_models"
     sdir.mkdir()
     src = tmp_path / "src"
     src.mkdir()
@@ -229,7 +229,7 @@ def test_run_combinr_consensus_passes_stringent_overlap(tmp_path, monkeypatch):
 
 
 def test_run_combinr_consensus_command_without_transcripts(tmp_path, monkeypatch):
-    sdir = tmp_path / "evm_consensus_models"
+    sdir = tmp_path / "consensus_models"
     sdir.mkdir()
     src = tmp_path / "src"
     src.mkdir()
@@ -248,7 +248,7 @@ def test_run_combinr_consensus_command_without_transcripts(tmp_path, monkeypatch
 
 
 def test_combinr_path_override(tmp_path, monkeypatch):
-    sdir = tmp_path / "evm_consensus_models"
+    sdir = tmp_path / "consensus_models"
     sdir.mkdir()
     src = tmp_path / "src"
     src.mkdir()
@@ -269,15 +269,15 @@ def test_combinr_path_override(tmp_path, monkeypatch):
 # with a consensus mRNA plus a wider transcript isoform carrying 5'/3' UTR, and
 # combinr's mRNA attributes (support/score/low_support/contains).
 _COMBINR_ALTSPLICE_GFF = """\
-chr1\tcombinr\tgene\t60\t260\t.\t+\t.\tID=evm.chr1.g1
-chr1\tcombinr\tmRNA\t100\t198\t.\t+\t.\tID=evm.chr1.g1.consensus;Parent=evm.chr1.g1;support=consensus;score=1234.5;score_ratio=10.0;coding_length=99;low_support=false;partial5=false;partial3=false
-chr1\tcombinr\texon\t100\t198\t.\t+\t.\tID=evm.chr1.g1.consensus.exon1;Parent=evm.chr1.g1.consensus
-chr1\tcombinr\tCDS\t100\t198\t.\t+\t0\tID=evm.chr1.g1.consensus.cds1;Parent=evm.chr1.g1.consensus
-chr1\tcombinr\tmRNA\t60\t260\t.\t+\t.\tID=evm.chr1.g1.iso1;Parent=evm.chr1.g1;support=transcript_isoform;coding_altered=false;sources=transcript_alignments.gff3;contains=t1,t2
-chr1\tcombinr\tfive_prime_UTR\t60\t99\t.\t+\t.\tID=evm.chr1.g1.iso1.utr5;Parent=evm.chr1.g1.iso1
-chr1\tcombinr\texon\t60\t260\t.\t+\t.\tID=evm.chr1.g1.iso1.exon1;Parent=evm.chr1.g1.iso1
-chr1\tcombinr\tCDS\t100\t198\t.\t+\t0\tID=evm.chr1.g1.iso1.cds1;Parent=evm.chr1.g1.iso1
-chr1\tcombinr\tthree_prime_UTR\t199\t260\t.\t+\t.\tID=evm.chr1.g1.iso1.utr3;Parent=evm.chr1.g1.iso1
+chr1\tcombinr\tgene\t60\t260\t.\t+\t.\tID=consensus.chr1.g1
+chr1\tcombinr\tmRNA\t100\t198\t.\t+\t.\tID=consensus.chr1.g1.consensus;Parent=consensus.chr1.g1;support=consensus;score=1234.5;score_ratio=10.0;coding_length=99;low_support=false;partial5=false;partial3=false
+chr1\tcombinr\texon\t100\t198\t.\t+\t.\tID=consensus.chr1.g1.consensus.exon1;Parent=consensus.chr1.g1.consensus
+chr1\tcombinr\tCDS\t100\t198\t.\t+\t0\tID=consensus.chr1.g1.consensus.cds1;Parent=consensus.chr1.g1.consensus
+chr1\tcombinr\tmRNA\t60\t260\t.\t+\t.\tID=consensus.chr1.g1.iso1;Parent=consensus.chr1.g1;support=transcript_isoform;coding_altered=false;sources=transcript_alignments.gff3;contains=t1,t2
+chr1\tcombinr\tfive_prime_UTR\t60\t99\t.\t+\t.\tID=consensus.chr1.g1.iso1.utr5;Parent=consensus.chr1.g1.iso1
+chr1\tcombinr\texon\t60\t260\t.\t+\t.\tID=consensus.chr1.g1.iso1.exon1;Parent=consensus.chr1.g1.iso1
+chr1\tcombinr\tCDS\t100\t198\t.\t+\t0\tID=consensus.chr1.g1.iso1.cds1;Parent=consensus.chr1.g1.iso1
+chr1\tcombinr\tthree_prime_UTR\t199\t260\t.\t+\t.\tID=consensus.chr1.g1.iso1.utr3;Parent=consensus.chr1.g1.iso1
 """
 
 
@@ -303,7 +303,7 @@ def test_combinr_handoff_preserves_isoforms_and_implicit_utr(tmp_path, monkeypat
     overhang beyond CDS (combinr's explicit UTR features collapse into exons,
     the canonical NCBI representation)."""
     def fake(config, sdir, evidence, *, transcripts=None):
-        (config.work_dir / "evm_consensus_models" / "consensus_models.gff3").write_text(
+        (config.work_dir / "consensus_models" / "consensus_models.gff3").write_text(
             _COMBINR_ALTSPLICE_GFF
         )
         return sdir / "consensus_models.gff3"
@@ -338,7 +338,7 @@ def test_combinr_consensus_end_to_end(tmp_path):
 
     A transcript wider than the predicted CDS must yield an isoform with UTR;
     asserts the staged + converted evidence drives combinr to a valid final
-    GFF3 (the path EVM/CI cannot exercise without the Rust binary)."""
+    GFF3 (the path CI cannot exercise without the Rust binary)."""
     seq = list("A" * 600)
     orf = "ATG" + "AAG" * 31 + "TAA"  # clean ORF, no internal in-frame stop
     for i, ch in enumerate(orf):

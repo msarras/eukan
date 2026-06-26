@@ -47,8 +47,8 @@ from eukan.cli._framework import (
 )
 @optgroup.option(
     "--combinr-stringent-overlap", type=float, default=None,
-    help="combinr --stringent-overlap for the consensus --alt-splice isoform grouping "
-    "(PASA --stringent_alignment_overlap): two transcript isoforms attach to one gene "
+    help="combinr --stringent-overlap for the consensus --alt-splice isoform grouping: "
+    "two transcript isoforms attach to one gene "
     "only when their span overlap is >= this percent of the shorter (default 0 = any "
     "overlap). Raise it (e.g. 30) to keep tip-overlapping collinear neighbours separate.",
 )

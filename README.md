@@ -36,7 +36,7 @@ conda activate eukan
 eukan check
 ```
 
-The `eukan` CLI configures all required environment variables (e.g. `$ZOE`, `$ALN_TAB`, EVM paths) automatically at startup. If you need to run the underlying tools directly outside of `eukan`, install the optional activation script:
+The `eukan` CLI configures all required environment variables (e.g. `$ZOE`, `$ALN_TAB`) automatically at startup. If you need to run the underlying tools directly outside of `eukan`, install the optional activation script:
 
 ```bash
 mkdir -p $CONDA_PREFIX/etc/conda/activate.d
@@ -75,7 +75,7 @@ The `dev` group adds `pytest`, `ruff`, and `mypy`.
 
 **Python** (managed by Poetry): click, gffutils, biopython, pandas, requests, pydantic-settings.
 
-**External tools** (via Docker image or conda): AUGUSTUS, SNAP, CodingQuarry, spaln, GenomeThreader, EVidenceModeler, PASA, Trinity, STAR, samtools, BLAT, jellyfish, GMAP/GSNAP, fasta36, TRF.
+**External tools** (via Docker image or conda): AUGUSTUS, SNAP, CodingQuarry, spaln, GenomeThreader, combinr, Trinity, STAR, samtools, BLAT, jellyfish, GMAP/GSNAP, fasta36, TRF.
 
 **Manual install**:
 - GeneMark-ES/ET/EP+:  [license required](https://topaz.gatech.edu/GeneMark/license_download.cgi)
@@ -135,7 +135,7 @@ poetry run eukan assemble -g genome.fasta -l left.fq -r right.fq -S RF
 
 ### `eukan annotate`
 
-Run the genome annotation pipeline. When run in the same directory as `eukan assemble`, transcript evidence (FASTA, GFF3, RNA-seq hints), strand-specificity, and a PASA database for UTR addition are discovered automatically.
+Run the genome annotation pipeline. When run in the same directory as `eukan assemble`, transcript evidence (FASTA, GFF3, RNA-seq hints) and strand-specificity are discovered automatically. UTRs and alternative isoforms are folded in from the transcript evidence by the combinr consensus engine.
 
 ```
 Usage: eukan annotate [OPTIONS]
@@ -157,7 +157,6 @@ Override options:
   -tg, --transcripts-gff PATH     Override auto-discovered transcript GFF3.
   -r, --rnaseq-hints PATH         Override auto-discovered RNA-seq hints GFF.
   --strand-specific                Transcripts are strand-oriented.
-  --utrs PATH                      PASA SQLite database for UTR addition.
   --splice-permissive              Allow non-canonical splice sites (GC-AG, AT-AC).
 
 Experimental:
@@ -169,7 +168,7 @@ Re-run steps:
   --run-prot-align                 Force re-run protein alignment (spaln/gth).
   --run-augustus                    Force re-run AUGUSTUS training and prediction.
   --run-snap                       Force re-run SNAP (and CodingQuarry) prediction.
-  --run-consensus                  Force re-run EVM consensus model building.
+  --run-consensus                  Force re-run combinr consensus model building.
 ```
 
 #### Notes on `annotate` input
@@ -195,7 +194,7 @@ Pipeline parameters:
                                    Strand-specific library type (RF/FR for paired, R/F for single).
   -t, --align-mode [EndToEnd|Local] STAR alignment mode. [default: Local]
   --splice-permissive              Allow non-canonical splice sites (GC-AG, AT-AC).
-  -c, --code [1|6|10|12]           NCBI genetic code for PASA. [default: 1]
+  -c, --code INTEGER               NCBI genetic code table number. [default: 1]
   -m, --min-intron INTEGER         Min intron length. [default: 20]
   -M, --max-intron INTEGER         Max intron length. [default: 5000]
   --phred [33|64]                  Phred quality score. [default: 33]
@@ -204,11 +203,11 @@ Pipeline parameters:
 Re-run steps:
   -A, --run-star                   Force re-run STAR read mapping.
   -T, --run-trinity                Force re-run Trinity assembly.
-  -P, --run-pasa                   Force re-run PASA alignment.
+  --run-combinr                    Force re-run combinr transcript consolidation.
   -f, --force                      Force re-run all steps.
 ```
 
-The pipeline runs STAR mapping, genome-guided + de novo Trinity assembly, and PASA alignment. STAR also profiles splice site types from junction evidence (`splice_site_summary.json`), which the annotation pipeline uses to allow non-canonical splice sites in AUGUSTUS. If no step flags (`-A`, `-T`, `-P`) are given, all steps run.
+The pipeline runs STAR mapping, genome-guided + de novo Trinity assembly, and combinr transcript consolidation. STAR also profiles splice site types from junction evidence (`splice_site_summary.json`), which the annotation pipeline uses to allow non-canonical splice sites in AUGUSTUS. If no step flags (`-A`, `-T`, `--run-combinr`) are given, all steps run.
 
 #### Soft-clip + intron BAM diagnostic
 
@@ -507,9 +506,8 @@ The annotation pipeline (`eukan annotate`) runs the following steps:
 3. **Protein alignment**:  Spliced alignment via spaln (intron-rich genomes, > 25% introns/gene) or GenomeThreader (intron-poor). See [Protein alignment modes](#protein-alignment-modes).
 4. **AUGUSTUS**:  Train species-specific parameters from concordant GeneMark/protein models, then predict genes using protein + RNA-seq hints. Non-canonical splice sites (e.g., AT-AC) are allowed automatically when supported by sufficient junction evidence from STAR; `--splice-permissive` lowers the evidence thresholds.
 5. **SNAP**:  Train and predict (all kingdoms). **CodingQuarry** also runs for fungus/protist genomes.
-6. **EVidenceModeler**:  Build weighted consensus gene models from all evidence sources.
-7. **PASA UTRs**:  Add UTR annotations and model alternative splicing from the transcriptome database.
-8. **Final output**:  Assign sequential locus tags and correct CDS phases. Non-overlapping transcript ORFs not captured by EVM are patched into the final model set.
+6. **combinr consensus**:  Build weighted consensus gene models from all evidence sources, folding in UTRs and alternative isoforms from the transcript evidence in a single pass.
+7. **Final output**:  Assign sequential locus tags and correct CDS phases. Non-overlapping transcript ORFs not captured by the consensus are patched into the final model set.
 
 Output: `final.gff3` in the working directory.
 
@@ -547,8 +545,8 @@ eukan status
 # Re-run only protein alignment
 eukan annotate -g genome.fasta -p proteins.fasta --run-prot-align
 
-# Re-run only PASA in assembly
-eukan assemble -g genome.fasta -l left.fq -r right.fq -P
+# Re-run only combinr consolidation in assembly
+eukan assemble -g genome.fasta -l left.fq -r right.fq --run-combinr
 ```
 
 ## Testing
@@ -603,8 +601,8 @@ python tests/run_pipeline.py test-pipeline -d tests/data -w tests/pipeline-run
 ```
 
 The test pipeline runs:
-1. **Transcriptome assembly**: STAR read mapping, Trinity (genome-guided + de novo), PASA alignment
-2. **Genome annotation**:  GeneMark, protein alignment (spaln/gth), AUGUSTUS, SNAP, EVM consensus
+1. **Transcriptome assembly**: STAR read mapping, Trinity (genome-guided + de novo), combinr consolidation
+2. **Genome annotation**:  GeneMark, protein alignment (spaln/gth), AUGUSTUS, SNAP, combinr consensus
 
 If assembly fails, it falls back to protein-only annotation automatically.
 

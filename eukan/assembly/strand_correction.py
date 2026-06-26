@@ -29,7 +29,7 @@ BAM converted to models) for the SL cut, and — when active — a
 ``<track>.genome.stranded.gff3`` per track plus a ``strand_correction.tsv`` audit
 table.
 
-Ported from the PASA-targeted ``strand_disambiguation.py`` (commit 52a8e63): the
+Ported from ``strand_disambiguation.py`` (commit 52a8e63): the
 homology-tool-agnostic hit parsing and the ``consensus_on_strand`` / ``introns_of``
 splice-motif helpers. The per-locus *drop* is replaced by a per-transcript *flip*,
 which fits the one-strand-per-transcript model output.

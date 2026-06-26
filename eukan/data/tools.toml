@@ -183,7 +183,7 @@ required_by = ["assemble", "annotate"]
 # repo and put target/release/combinr on PATH (or set the combinr_path config /
 # EUKAN_ASSEMBLE_COMBINR_PATH). Consolidates transcript-to-genome BAMs into
 # non-redundant models (assemble) and builds weighted consensus gene models
-# (annotate) — replaces both PASA and EVidenceModeler.
+# (annotate).
 install_hint = "Build combinr (cargo build --release) and put target/release/combinr on PATH, or set EUKAN_ASSEMBLE_COMBINR_PATH."
 
 [genomethreader]

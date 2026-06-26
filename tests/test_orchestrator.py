@@ -43,7 +43,7 @@ class TestForceStepsFromRunFlags:
 
     def test_run_consensus_alone(self):
         assert force_steps_from_run_flags(run_consensus=True) == [
-            "annotation/evm_consensus_models"
+            "annotation/consensus_models"
         ]
 
     def test_run_prot_align_default_picks_non_ssp(self):
@@ -77,7 +77,7 @@ class TestForceStepsFromRunFlags:
             "annotation/augustus",
             "annotation/snap",
             "annotation/codingquarry",
-            "annotation/evm_consensus_models",
+            "annotation/consensus_models",
         }
         assert "annotation/prot_align_ssp" not in result
 

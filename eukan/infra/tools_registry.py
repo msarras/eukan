@@ -18,7 +18,7 @@ Schema (per-tool, all fields optional unless noted)::
 
     env_vars = [                                     # env vars the tool needs
         { var = "AUGUSTUS_CONFIG_PATH", path = "config" },
-        { var = "PASAHOME", add_to_path = ["scripts"] },
+        { var = "TOOL_HOME", add_to_path = ["scripts"] },
     ]
     conda_path_dirs = ["opt/genemark"]               # prepended to PATH
     conda_lib_dirs  = ["lib"]                        # LD_LIBRARY_PATH (subprocess-only)
@@ -30,7 +30,7 @@ environment (e.g., a Dockerfile ENV line).
 
 ``add_to_path`` dirs are resolved relative to the env var's value and
 prepended to ``PATH`` — used for helper scripts bundled inside a tool's
-install tree (e.g., ``$PASAHOME/scripts``).
+install tree (e.g., ``$TOOL_HOME/scripts``).
 """
 
 from __future__ import annotations
