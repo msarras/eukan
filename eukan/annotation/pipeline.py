@@ -173,7 +173,7 @@ def run_annotation_pipeline(
         expected = _expected_steps(config)
         pending = [s for s in expected if s not in manifest.steps]
         if not pending:
-            final = is_step_complete(manifest, step_key(ANNOTATION, "evm_consensus_models"))
+            final = is_step_complete(manifest, step_key(ANNOTATION, "consensus_models"))
             if final is not None:
                 log.info("All steps complete. Use --run-* flags to re-run specific steps.")
                 return final
@@ -206,7 +206,7 @@ _ANNOTATION_STEP_FLAGS: dict[str, str] = {
     "augustus":             "--run-augustus",
     "snap":                 "--run-snap",
     "codingquarry":         "--run-snap",
-    "evm_consensus_models": "--run-consensus",
+    "consensus_models": "--run-consensus",
 }
 
 
@@ -253,7 +253,7 @@ def _expected_steps(config: PipelineConfig) -> list[str]:
         steps.extend(["snap", "codingquarry"])
     else:
         steps.append("snap")
-    steps.append("evm_consensus_models")
+    steps.append("consensus_models")
     return [step_key(ANNOTATION, s) for s in steps]
 
 
@@ -280,7 +280,7 @@ def _execute_steps(config: PipelineConfig, manifest: RunManifest) -> Path:
     ev = _phase_protein_alignment(config, manifest, ev)
     ev = _phase_augustus(config, manifest, ev)
     ev = _phase_snap_codingquarry(config, manifest, ev)
-    return _phase_evm(config, manifest, ev)
+    return _phase_consensus(config, manifest, ev)
 
 
 def _phase_orf_and_genemark(
@@ -377,7 +377,7 @@ def _consensus_scalars(config: PipelineConfig) -> list[str]:
     ]
 
 
-def _phase_evm(
+def _phase_consensus(
     config: PipelineConfig, manifest: RunManifest, ev: dict[str, Path],
 ) -> Path:
     """Phase 5: combinr consensus. Argument order varies with which evidence ran."""
@@ -397,7 +397,7 @@ def _phase_evm(
         transcripts = ev["genemark"]
 
     return _run_step(
-        config, manifest, "evm_consensus_models", build_consensus_models,
+        config, manifest, "consensus_models", build_consensus_models,
         *consensus_args, transcripts=transcripts,
         input_scalars=_consensus_scalars(config),
     )

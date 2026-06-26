@@ -61,7 +61,7 @@ def build_consensus_models(
     non-fungus/protist branch, or ``None``. (combinr ignores the GeneMark
     stand-in — it gates transcript evidence on ``config.has_transcripts``.)
     """
-    sdir = step_dir(config.work_dir, "evm_consensus_models")
+    sdir = step_dir(config.work_dir, "consensus_models")
     log.info("Building consensus gene models...")
 
     run_combinr_consensus(config, sdir, list(evidence), transcripts=transcripts)

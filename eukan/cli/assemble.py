@@ -8,8 +8,9 @@ import click
 from click_option_group import optgroup
 
 from eukan.cli._framework import (
-    PASA_CODE_TABLE,
+    FULL_CODE_TABLE,
     PreformattedEpilogCommand,
+    code_option,
     drop_none,
     force_option,
     genome_option,
@@ -18,7 +19,7 @@ from eukan.cli._framework import (
 )
 
 
-@click.command(cls=PreformattedEpilogCommand, epilog=PASA_CODE_TABLE)
+@click.command(cls=PreformattedEpilogCommand, epilog=FULL_CODE_TABLE)
 @optgroup.group("Required input")
 @genome_option("Genome FASTA file.")
 @optgroup.option("--left", "-l", type=click.Path(exists=True, path_type=Path), help="Left paired-end reads.")
@@ -47,7 +48,7 @@ from eukan.cli._framework import (
 @optgroup.option(
     "--splice-permissive", is_flag=True, default=False,
     help="Allow non-canonical splice sites (GC-AG, AT-AC). "
-    "Sets PASA splice boundary stringency to 0 and retains non-canonical junctions.",
+    "Sets splice boundary stringency to 0 and retains non-canonical junctions.",
 )
 @optgroup.option(
     "--diagnose-softclips/--no-diagnose-softclips", default=True,
@@ -56,12 +57,7 @@ from eukan.cli._framework import (
     "Detects trans-splicing (via de novo splice-leader clusters) and "
     "non-canonical splice prevalence; surfaces both as INFO/WARNING.",
 )
-@optgroup.option(
-    "--code", "-c",
-    type=click.Choice(["1", "6", "10", "12"]),
-    default="1", show_default=True,
-    help="NCBI genetic code for PASA. Supported: 1=standard, 6=Tetrahymena, 10=Euplotes, 12=Candida.",
-)
+@code_option(default=1)
 @optgroup.option("--min-intron", "-m", type=int, default=20, show_default=True, help="Minimum intron length.")
 @optgroup.option(
     "--max-intron", "-M", type=int, default=5000, show_default=True,
@@ -107,7 +103,7 @@ from eukan.cli._framework import (
 )
 @optgroup.option(
     "--combinr-stringent-overlap", type=float, default=None,
-    help="combinr --stringent-overlap (PASA --stringent_alignment_overlap): two "
+    help="combinr --stringent-overlap: two "
     "transcripts cluster only when their span overlap is >= this percent of the "
     "shorter transcript (default 0 = any overlap). Raise it (e.g. 30) to stop short "
     "or tip-overlapping transcripts welding collinear neighbours into one model.",
@@ -242,7 +238,7 @@ def assemble(
     uniprot: Path | None,
     splice_permissive: bool,
     diagnose_softclips: bool,
-    code: str,
+    code: int,
     memory_gb: int | None,
     force: bool,
 ) -> None:
@@ -305,7 +301,7 @@ def assemble(
         uniprot_db=resolve_optional_path(uniprot),
         splice_permissive=splice_permissive,
         diagnose_softclips=diagnose_softclips,
-        genetic_code=code,
+        genetic_code=str(code),
         left_reads=resolve_optional_path(left),
         right_reads=resolve_optional_path(right),
         single_reads=resolve_optional_path(single),

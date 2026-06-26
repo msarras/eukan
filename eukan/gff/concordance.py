@@ -29,7 +29,7 @@ WEAK_CONCORDANCE_THRESHOLD = 250
 
 # Friendly labels for evidence file stems whose on-disk name doesn't match
 # the tool that produced them. ``prot.gff3`` is the spaln output but its
-# filename is fixed by EVM's evidence table, so we relabel here for logs.
+# filename is fixed by the consensus evidence staging, so we relabel here for logs.
 _SOURCE_LABEL = {"prot": "spaln"}
 
 

@@ -1,4 +1,4 @@
-"""Unit tests for eukan.assembly.combinr (the PASA replacement)."""
+"""Unit tests for eukan.assembly.combinr (transcript consolidation)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from eukan.assembly.combinr import (
     _parse_attrs,
     _parse_combinr_gff3,
     _Transcript,
-    _write_evm_transcripts_and_hints,
+    _write_transcript_alignments_and_hints,
     _write_transcript_fasta,
     run_combinr,
 )
@@ -52,11 +52,11 @@ def test_parse_combinr_gff3_groups_and_sorts_exons(tmp_path):
 # --- artifact writers ------------------------------------------------------
 
 
-def test_write_evm_transcripts_and_hints(tmp_path):
+def test_write_transcript_alignments_and_hints(tmp_path):
     txs = [_Transcript("m1", "chr1", "+", [(100, 200), (300, 400)])]
     gff = tmp_path / "nr.gff3"
     hints = tmp_path / "hints.gff"
-    _write_evm_transcripts_and_hints(txs, gff, hints)
+    _write_transcript_alignments_and_hints(txs, gff, hints)
 
     rows = [ln.split("\t") for ln in gff.read_text().splitlines()]
     assert all(r[1] == "combinr-assembly" and r[2] == "exon" for r in rows)

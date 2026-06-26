@@ -90,8 +90,8 @@ def _subprocess_lib_dirs(prefix: str) -> tuple[str, ...]:
 
     Cached because the tool registry and conda prefix don't change during
     a process lifetime, but ``subprocess_env`` is called for every
-    external command — for pipelines that fan out to thousands of EVM or
-    AUGUSTUS partitions this work would otherwise repeat constantly.
+    external command — for pipelines that fan out to thousands of AUGUSTUS
+    or alignment partitions this work would otherwise repeat constantly.
     """
     if not prefix:
         return ()

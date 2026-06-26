@@ -1,13 +1,13 @@
-"""combinr transcript consolidation — the PASA replacement.
+"""combinr transcript consolidation.
 
 Runs the external ``combinr assemble`` over the **cut** transcript models
 (``{stem}.cut.gff3`` from :mod:`eukan.assembly.sl_cut` — max-intron-split and,
 when an SL signal is present, SL-cut de novo transcript→genome GFF3s) to build a
-non-redundant set of transcript models, then emits the same artifacts PASA
-produced so the annotation pipeline consumes them unchanged:
+non-redundant set of transcript models, then emits the artifacts the annotation
+pipeline consumes as transcript evidence:
 
 * ``nr_transcripts.gff3`` — flat ``exon`` features grouped by ``Parent`` (the
-  EVM ``--transcript_alignments`` contract), source ``combinr-assembly``;
+  ``--transcript-alignments`` contract), source ``combinr-assembly``;
 * ``nr_transcripts.fasta`` — spliced transcript sequences read off the genome;
 * ``hints_rnaseq.gff`` — transcript exon hints concatenated with the intron and
   coverage hints already written by the aligner step.
@@ -41,8 +41,8 @@ _CUT_MODELS = (
     "trinity-denovo.genome.cut.gff3",
     "trinity-gg.genome.cut.gff3",
 )
-# Source token written into nr_transcripts.gff3; EVM's weights.txt picks this up
-# as the TRANSCRIPT evidence source (eukan/annotation/evidence.py::_first_source_token).
+# Source token written into nr_transcripts.gff3; the consensus weights.txt picks
+# this up as the TRANSCRIPT evidence source (eukan/annotation/evidence.py::_first_source_token).
 _SOURCE = "combinr-assembly"
 
 
@@ -88,7 +88,7 @@ def _run_combinr_assemble(config: AssemblyConfig, inputs: list[Path], out_gff: P
         "--format", "gff3",
         "-t", str(config.num_cpu),
         "--max-intron", str(config.max_intron_len),
-        # PASA --stringent_alignment_overlap: 0 = off (any-overlap, the default).
+        # --stringent-overlap: 0 = off (any-overlap, the default).
         "--stringent-overlap", str(config.combinr_stringent_overlap),
     ]
     run_cmd(cmd, cwd=config.work_dir, out_file=out_gff.name)
@@ -124,13 +124,13 @@ def _parse_combinr_gff3(path: Path) -> list[_Transcript]:
     return result
 
 
-def _write_evm_transcripts_and_hints(
+def _write_transcript_alignments_and_hints(
     transcripts: list[_Transcript], gff_out: Path, hints_out: Path
 ) -> None:
-    """Emit the EVM transcript-alignments GFF3 + AUGUSTUS exon hints.
+    """Emit the transcript-alignments GFF3 + AUGUSTUS exon hints.
 
-    Both are flat ``exon`` features grouped by ``Parent`` (the format PASA
-    produced and EVM expects), tagged with the ``combinr-assembly`` source.
+    Both are flat ``exon`` features grouped by ``Parent`` (the
+    ``--transcript-alignments`` contract), tagged with the ``combinr-assembly`` source.
     """
     n = 0
     with open(gff_out, "w") as gff, open(hints_out, "w") as hints:
@@ -154,7 +154,7 @@ def _write_transcript_fasta(transcripts: list[_Transcript], genome: Path, out: P
 
 
 def run_combinr(config: AssemblyConfig) -> None:
-    """Consolidate the SL-cut transcript models with combinr (replaces PASA)."""
+    """Consolidate the SL-cut transcript models with combinr."""
     wd = config.work_dir
     inputs = [
         wd / f for f in _CUT_MODELS if (wd / f).exists() and (wd / f).stat().st_size > 0
@@ -175,7 +175,7 @@ def run_combinr(config: AssemblyConfig) -> None:
     if not transcripts:
         log.warning("combinr produced no transcript models — transcript evidence is empty.")
 
-    _write_evm_transcripts_and_hints(
+    _write_transcript_alignments_and_hints(
         transcripts, wd / Artifact.NR_TRANSCRIPTS_GFF, wd / "hints_transcripts.gff"
     )
     _write_transcript_fasta(transcripts, config.genome, wd / Artifact.NR_TRANSCRIPTS_FASTA)
