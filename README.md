@@ -8,7 +8,7 @@ Currently, Eukan installation is only supported via Docker and Conda.
 
 ### Docker
 
-The Docker image installs all external tools via conda (from the same `environment.yml` used for local installs), then builds fitild from source and optionally includes GeneMark.
+The Docker image installs all external tools via conda (from the same `environment.yml` used for local installs), then builds fitild from source, installs the pinned combinr release binary, and optionally includes GeneMark.
 
 ```bash
 git clone https://github.com/BFL-lab/eukan.git
@@ -46,7 +46,7 @@ conda deactivate && conda activate eukan
 
 The `environment.yml` is auto-generated from `eukan/data/tools.toml`. To regenerate after modifying tool versions: `python scripts/generate-env.py`.
 
-Two tools require manual installation after creating the environment. A helper script handles both:
+A few tools aren't on conda and are installed by a helper script after creating the environment: it builds **fitild** from source, downloads the pinned **combinr** release binary, and installs **GeneMark** if its (license-gated) archive is present.
 
 ```bash
 # Download GeneMark (license required) from:
@@ -75,10 +75,11 @@ The `dev` group adds `pytest`, `ruff`, and `mypy`.
 
 **Python** (managed by Poetry): click, gffutils, biopython, pandas, requests, pydantic-settings.
 
-**External tools** (via Docker image or conda): AUGUSTUS, SNAP, CodingQuarry, spaln, GenomeThreader, combinr, Trinity, STAR, samtools, BLAT, jellyfish, GMAP/GSNAP, fasta36, TRF.
+**External tools** (via Docker image or conda): AUGUSTUS, SNAP, CodingQuarry, spaln, GenomeThreader, Trinity, STAR, samtools, BLAT, jellyfish, GMAP/GSNAP, fasta36, TRF.
 
 **Manual install**:
 - GeneMark-ES/ET/EP+:  [license required](https://topaz.gatech.edu/GeneMark/license_download.cgi)
+- combinr:  pre-built release binary from [github.com/BFL-lab/combinr/releases](https://github.com/BFL-lab/combinr/releases) (installed automatically by Docker and `scripts/install-extras.sh`)
 - fitild:  [github.com/ogotoh/fitild](https://github.com/ogotoh/fitild) (only needed for spaln-based protein alignment in default fitild mode)
 - spaln analysis utilities (`utn`, `npssm`, `exinpot`, etc.): built from [spaln source](https://github.com/ogotoh/spaln) via `make all` (only needed for `--spsp` species-specific parameter mode)
 

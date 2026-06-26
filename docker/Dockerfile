@@ -12,9 +12,10 @@
 FROM condaforge/mambaforge:latest AS builder
 
 # System packages needed for building fitild and rebuilding Trinity's
-# bundled C++ (cmake) for non-AVX2 portability
+# bundled C++ (cmake) for non-AVX2 portability, plus curl/xz to fetch and
+# unpack the pre-built combinr release tarball.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential git autoconf cmake \
+    build-essential git autoconf cmake curl ca-certificates xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
@@ -80,6 +81,27 @@ RUN git clone --depth 1 https://github.com/ogotoh/spaln /tmp/spaln_src \
        /opt/conda/envs/eukan/share/spaln/alndbs/ \
     && chmod +x /opt/conda/envs/eukan/share/spaln/alndbs/*.pl \
     && rm -rf /tmp/spaln_src
+
+# ---------------------------------------------------------------------------
+# 2c. combinr — pre-built release binary (Rust tool, not on conda)
+#
+# combinr provides `combinr assemble` (transcript consolidation) and
+# `combinr consensus` (weighted consensus gene models), both required by the
+# assemble/annotate pipelines. Pull the pinned, statically-linked musl build
+# from the GitHub release, verify its SHA-256, and install onto PATH (the conda
+# env's bin/, already first on PATH in the runtime stage). Bump VERSION and
+# SHA256 together to upgrade; they are validated against each other at build.
+# ---------------------------------------------------------------------------
+ARG COMBINR_VERSION=0.1.0
+ARG COMBINR_SHA256=bd2f3f7c2284d4dfa8e275ce14aaf5ca39d39b0f2f95e2b4f6f42b6901e9b97f
+RUN combinr_dir="combinr-x86_64-unknown-linux-musl" \
+    && curl -fsSL -o "/tmp/${combinr_dir}.tar.xz" \
+       "https://github.com/BFL-lab/combinr/releases/download/v${COMBINR_VERSION}/${combinr_dir}.tar.xz" \
+    && echo "${COMBINR_SHA256}  /tmp/${combinr_dir}.tar.xz" | sha256sum -c - \
+    && tar xJf "/tmp/${combinr_dir}.tar.xz" -C /tmp \
+    && install -m 0755 "/tmp/${combinr_dir}/combinr" /opt/conda/envs/eukan/bin/combinr \
+    && rm -rf "/tmp/${combinr_dir}.tar.xz" "/tmp/${combinr_dir}" \
+    && combinr --version
 
 # ---------------------------------------------------------------------------
 # 3. GeneMark (optional — requires user-provided license files)
