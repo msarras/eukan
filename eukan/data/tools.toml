@@ -134,6 +134,11 @@ version_cmd = ["Trinity", "--version"]
 required_by = ["assemble"]
 conda_package = "trinity"
 min_version = "2.15"
+# Pinned to the last x86-64-v2 build: bioconda's newer 2.15.2 builds (h077b44d)
+# are compiled -march=x86-64-v3 and emit BMI2 (sarx/shrx), which SIGILL on
+# pre-Haswell CPUs (e.g. Xeon E5-2690 v2). The _0 build is x86-64-v2 and runs
+# the same genome-guided + de-novo paths.
+conda_pin = "=2.15.2=pl5321hdcf5f25_0"
 # TRINITY_HOME is version-specific; set by the Dockerfile ENV.
 env_vars = [{ var = "TRINITY_HOME" }]
 
