@@ -84,7 +84,7 @@ RUN git clone --depth 1 https://github.com/ogotoh/spaln /tmp/spaln_src \
 # SHA256 together to upgrade; they are validated against each other at build.
 # ---------------------------------------------------------------------------
 ARG COMBINR_VERSION=0.1.1
-ARG COMBINR_SHA256=SENTINEL_SHA256_x86_64-unknown-linux-musl
+ARG COMBINR_SHA256=913c9698124cc3891c01d738cb775bcd5918f7af57ddd499108420d1aed7c222
 RUN combinr_dir="combinr-x86_64-unknown-linux-musl" \
     && curl -fsSL -o "/tmp/${combinr_dir}.tar.xz" \
        "https://github.com/BFL-lab/combinr/releases/download/v${COMBINR_VERSION}/${combinr_dir}.tar.xz" \
