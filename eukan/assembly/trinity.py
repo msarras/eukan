@@ -47,6 +47,19 @@ def _run_trinity_mode(
     if final.exists():
         return
 
+    # A leftover <prefix>/ working dir means a prior run of this mode was killed
+    # before producing <prefix>.fasta — a clean run removes it (the rmtree below;
+    # --full_cleanup also clears it on Trinity's own success). Relaunching over it
+    # makes Trinity *resume* from its per-cluster checkpoints, and a checkpoint left
+    # half-written by the kill (e.g. a recursive cluster stuck between Inchworm and
+    # Chrysalis) sends the resumed run into an endless retry of that cluster that
+    # ultimately exits non-zero with no FASTA produced. eukan's resume granularity
+    # is the step, not Trinity's internal checkpoints, so start every (re-)run from
+    # a clean slate. (Trade-off: an interrupted assembly restarts from scratch
+    # rather than resuming — consistent with every other step, which don't
+    # sub-checkpoint either, and it avoids the far worse corrupt-resume failure.)
+    shutil.rmtree(wd / prefix, ignore_errors=True)
+
     log.info(log_message)
     lib_type_args = (
         ["--SS_lib_type", config.strand_specific] if config.strand_specific else []

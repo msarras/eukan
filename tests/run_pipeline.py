@@ -52,7 +52,10 @@ def _run_eukan(args: list[str], cwd: Path, label: str) -> subprocess.CompletedPr
     sys.stdout.flush()
     result = subprocess.run(cmd, cwd=cwd)
     if result.returncode != 0:
-        raise RuntimeError(f"{label} failed (exit {result.returncode})")
+        # The caller prefixes "{label} failed: " when reporting, so keep this
+        # message label-free to avoid "Repeat masking failed: Repeat masking
+        # failed (exit 1)" style doubling.
+        raise RuntimeError(f"exited with code {result.returncode}")
     return result
 
 
@@ -261,8 +264,10 @@ def test_pipeline_cmd(
             click.echo(f"\n  Repeat masking failed: {e}")
             if not repeat_lib.exists():
                 click.echo(
-                    f"  Hint: RepeatModeler often fails on small genomes; "
-                    f"supply a library at {repeat_lib} to skip it.",
+                    f"  Hint: a pre-built library at {repeat_lib} skips "
+                    f"RepeatModeler (which often fails on small genomes); it "
+                    f"will not fix RepeatMasker/Dfam-FamDB errors like the one "
+                    f"above.",
                 )
             click.echo("  Continuing with unmasked genome.")
 
