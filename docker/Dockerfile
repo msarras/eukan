@@ -11,11 +11,10 @@
 # ============================= BUILDER STAGE =================================
 FROM condaforge/mambaforge:latest AS builder
 
-# System packages needed for building fitild and rebuilding Trinity's
-# bundled C++ (cmake) for non-AVX2 portability, plus curl/xz to fetch and
-# unpack the pre-built combinr release tarball.
+# System packages needed for building fitild and spaln from source, plus
+# curl/xz to fetch and unpack the pre-built combinr release tarball.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential git autoconf cmake curl ca-certificates xz-utils \
+    build-essential git autoconf curl ca-certificates xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
@@ -34,19 +33,11 @@ RUN mamba env create -f environment.yml \
 # Activate the eukan environment for all subsequent RUN commands
 SHELL ["conda", "run", "-n", "eukan", "/bin/bash", "-c"]
 
-# ---------------------------------------------------------------------------
-# 1b. Recompile Trinity's bundled C++ for non-AVX2 portability
-#
-# bioconda's Trinity ships Inchworm/Chrysalis/bamsifter built with
-# -march=x86-64-v3 (AVX2+FMA+BMI), so they die with "Illegal instruction" on
-# pre-Haswell CPUs (e.g. Ivy Bridge Xeon E5-26xx v2). Rebuild them from the
-# package's bundled source at -march=x86-64-v2 so the image runs on any
-# x86-64-v2+ host. Must run here in the builder: it needs the apt
-# build-essential/cmake toolchain and include/ (htslib headers), both of which
-# the strip step (section 4) removes.
-# ---------------------------------------------------------------------------
-COPY scripts/fix-trinity-avx2.sh /opt/eukan/scripts/
-RUN bash /opt/eukan/scripts/fix-trinity-avx2.sh
+# Trinity's bundled C++ no longer needs a non-AVX2 rebuild here: the conda env
+# pins trinity to the x86-64-v2 build (=2.15.2=pl5321hdcf5f25_0, see
+# tools.toml / environment.yml), like star/augustus/spaln/spades/stringtie.
+# scripts/fix-trinity-avx2.sh remains as a manual recovery tool if that pin is
+# ever bypassed (e.g. `conda update trinity` pulling a -march=x86-64-v3 build).
 
 # ---------------------------------------------------------------------------
 # 2. Build fitild from source (gsl + liblbfgs come from the conda env)
@@ -92,8 +83,8 @@ RUN git clone --depth 1 https://github.com/ogotoh/spaln /tmp/spaln_src \
 # env's bin/, already first on PATH in the runtime stage). Bump VERSION and
 # SHA256 together to upgrade; they are validated against each other at build.
 # ---------------------------------------------------------------------------
-ARG COMBINR_VERSION=0.1.0
-ARG COMBINR_SHA256=bd2f3f7c2284d4dfa8e275ce14aaf5ca39d39b0f2f95e2b4f6f42b6901e9b97f
+ARG COMBINR_VERSION=0.1.1
+ARG COMBINR_SHA256=913c9698124cc3891c01d738cb775bcd5918f7af57ddd499108420d1aed7c222
 RUN combinr_dir="combinr-x86_64-unknown-linux-musl" \
     && curl -fsSL -o "/tmp/${combinr_dir}.tar.xz" \
        "https://github.com/BFL-lab/combinr/releases/download/v${COMBINR_VERSION}/${combinr_dir}.tar.xz" \
