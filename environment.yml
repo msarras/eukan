@@ -1,6 +1,10 @@
 # Auto-generated from tools.toml — do not edit manually.
 # Regenerate with: python scripts/generate-env.py
 #
+# Create with STRICT channel priority (bioconda requirement — without it the
+# solver mixes channel builds and yields inconsistent deps, e.g. r-stringi vs icu):
+#   CONDA_CHANNEL_PRIORITY=strict conda env create -f environment.yml
+#
 # Tools requiring manual installation:
 #   - genemark: Requires a license from https://topaz.gatech.edu/GeneMark/license_download.cgi
 #   - fitild: Build from source: git clone https://github.com/ogotoh/fitild && cd fitild/src && ./configure && make
@@ -29,8 +33,8 @@
 
 name: eukan
 channels:
-  - bioconda
   - conda-forge
+  - bioconda
   - defaults
 
 dependencies:

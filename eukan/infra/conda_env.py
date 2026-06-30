@@ -48,6 +48,10 @@ def generate_environment_yml() -> str:
         "# Auto-generated from tools.toml — do not edit manually.",
         "# Regenerate with: python scripts/generate-env.py",
         "#",
+        "# Create with STRICT channel priority (bioconda requirement — without it the",
+        "# solver mixes channel builds and yields inconsistent deps, e.g. r-stringi vs icu):",
+        "#   CONDA_CHANNEL_PRIORITY=strict conda env create -f environment.yml",
+        "#",
         "# Tools requiring manual installation:",
         *manual,
         "#",
@@ -56,8 +60,12 @@ def generate_environment_yml() -> str:
         "",
         "name: eukan",
         "channels:",
-        "  - bioconda",
+        # bioconda requires this exact channel order (conda-forge first), paired
+        # with strict channel priority; a bioconda-first / flexible-priority solve
+        # mixes builds across channels and yields inconsistent runtime deps (e.g.
+        # an r-stringi linked against an icu version not in the env).
         "  - conda-forge",
+        "  - bioconda",
         "  - defaults",
         "",
         "dependencies:",

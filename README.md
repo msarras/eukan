@@ -33,10 +33,13 @@ Installs all external tools via bioconda and eukan itself via pip, in one step:
 ```bash
 git clone https://github.com/BFL-lab/eukan.git
 cd eukan
+conda config --set channel_priority strict   # bioconda requirement (see note below)
 conda env create -f environment.yml
 conda activate eukan
 eukan check
 ```
+
+> **Strict channel priority is required.** Bioconda must be solved with `conda-forge` first and strict priority (the `channels:` order in `environment.yml` is already correct). Without strict priority the solver mixes builds across channels and produces inconsistent runtime dependencies — e.g. an R `stringi` linked against an `icu` version not present in the env, which fails a bioconductor post-link script. If you don't want to change your global config, prefix the create instead: `CONDA_CHANNEL_PRIORITY=strict conda env create -f environment.yml`.
 
 The `eukan` CLI configures all required environment variables (e.g. `$ZOE`, `$ALN_TAB`) automatically at startup. If you need to run the underlying tools directly outside of `eukan`, install the optional activation script:
 
