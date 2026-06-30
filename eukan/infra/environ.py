@@ -22,6 +22,11 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
+try:
+    import resource
+except ImportError:  # pragma: no cover - non-Unix platforms
+    resource = None  # type: ignore[assignment]
+
 from eukan.infra.tools_registry import Tool, load_tools
 
 
@@ -69,12 +74,41 @@ def _apply_path_dirs(tool: Tool, prefix: str, env: dict[str, str]) -> None:
             _prepend(env, "PATH", resolved)
 
 
+def _raise_open_file_limit() -> None:
+    """Raise the soft open-file limit toward the hard cap.
+
+    STAR's BAM sorter opens roughly ``runThreadN * outBAMsortingBinsN`` temp
+    files at once (e.g. 40 threads * 50 bins ~= 2000); samtools and segemehl are
+    similarly fd-hungry. When a login shell leaves the soft ``RLIMIT_NOFILE`` at
+    the common 1024 default, those tools abort mid-run with "could not create
+    output file ..." (STAR exits 109). Bump the soft limit to the hard limit
+    (capped) so the child tools we spawn inherit the headroom. Best-effort: any
+    failure leaves the inherited shell limit untouched.
+    """
+    if resource is None:
+        return
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except (ValueError, OSError):
+        return
+    ceiling = 1_048_576  # don't request an absurd value if hard is unlimited
+    target = ceiling if hard == resource.RLIM_INFINITY else min(hard, ceiling)
+    if soft >= target:
+        return
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+    except (ValueError, OSError):
+        pass
+
+
 def configure_process_env() -> None:
     """Set global env vars for the current process.
 
     Called once at CLI startup. Skips ``conda_lib_dirs`` — those are
     subprocess-only to avoid breaking system tools (git, curl, etc.).
     """
+    _raise_open_file_limit()
+
     prefix = os.environ.get("CONDA_PREFIX")
     if not prefix:
         return
