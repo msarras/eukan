@@ -11,9 +11,9 @@ Schema (per-tool, all fields optional unless noted)::
     required_by     = ["annotate"]                   # subcommands needing this tool
     conda_package   = "augustus"                     # omit if not on bioconda
     min_version     = "3.5"                          # conda pin; omit for unpinned
-    conda_pin       = "=2.7.11b=h43eeafb_3"          # exact version=build; overrides
+    conda_pin       = "=<version>=<build>"           # exact version=build; overrides
                                                      # min_version in environment.yml
-                                                     # (e.g. to hold an x86-64-v2 build)
+                                                     # (e.g. to hold a CPU-compatible build)
     install_hint    = "..."                          # shown when tool missing
 
     env_vars = [                                     # env vars the tool needs

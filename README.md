@@ -6,6 +6,8 @@ A comprehensive annotation pipeline tailored for eukaryotic genomes, particularl
 
 Currently, Eukan installation is only supported via Docker and Conda.
 
+> **CPU requirement:** the prebuilt bioconda tool binaries target **x86-64-v3** (AVX2/BMI2/FMA — Intel Haswell / AMD Excavator or newer). On an older CPU they abort with `SIGILL (illegal instruction)`, which `eukan check` detects and explains. Running on a pre-AVX2 host requires pinning the affected tools back to their x86-64-v2 builds (`conda_pin` in `eukan/data/tools.toml`) and rebuilding Trinity via `scripts/fix-trinity-avx2.sh`.
+
 ### Docker
 
 The Docker image installs all external tools via conda (from the same `environment.yml` used for local installs), then builds fitild from source, installs the pinned combinr release binary, and optionally includes GeneMark.

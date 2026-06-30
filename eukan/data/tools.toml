@@ -13,9 +13,12 @@
 #   required_by     = which eukan subcommands need this tool
 #   conda_package   = bioconda/conda-forge package name (omit if not available)
 #   min_version     = minimum version for conda pin (omit for unpinned)
-#   conda_pin       = exact "=version=build" pin; overrides min_version. Used to
-#                     hold a tool at an x86-64-v2 build (bioconda's newer builds
-#                     target x86-64-v3 and SIGILL on pre-Haswell CPUs)
+#   conda_pin       = exact "=version=build" pin; overrides min_version. Use to
+#                     hold a tool at a CPU-compatible build when bioconda's
+#                     latest targets a microarch the host lacks (e.g. an
+#                     x86-64-v4/AVX-512 build would SIGILL on this x86-64-v3
+#                     host). No tool is currently pinned — the deployment host
+#                     is x86-64-v3 (AVX2/BMI2), so the default latest builds run.
 #   install_hint    = shown by `eukan check` when the tool is missing
 #
 #   env_vars = [ { var, path?, add_to_path? }, ... ]
@@ -38,9 +41,6 @@ version_cmd = ["augustus", "--version"]
 required_by = ["annotate"]
 conda_package = "augustus"
 min_version = "3.5"
-# Pinned to an x86-64-v2 build (also covers bundled etraining): bioconda's
-# newer 3.5.0 builds require AVX2 (x86-64-v3) and SIGILL on pre-Haswell CPUs.
-conda_pin = "=3.5.0=pl5321heb9362c_5"
 env_vars = [{ var = "AUGUSTUS_CONFIG_PATH", path = "config" }]
 
 [snap]
@@ -86,9 +86,6 @@ version_cmd = ["STAR", "--version"]
 required_by = ["assemble"]
 conda_package = "star"
 min_version = "2.7"
-# Pinned to the last x86-64-v2 build: bioconda's newer 2.7.11b builds
-# (h5ca1c30_4+) require AVX2 (x86-64-v3) and SIGILL on pre-Haswell CPUs.
-conda_pin = "=2.7.11b=h43eeafb_3"
 
 [stringtie]
 binary = "stringtie"
@@ -99,11 +96,7 @@ version_cmd = ["stringtie", "--version"]
 # `eukan check assemble` does not demand it.
 required_by = []
 conda_package = "stringtie"
-min_version = "2.2"
-# Pinned to a pre-v3 build: bioconda's 3.0.x builds (h29c0135) require
-# AVX2/BMI2/FMA (x86-64-v3) and SIGILL on pre-Haswell CPUs. The 2022
-# 2.2.1=h3198e80_0 build is x86-64-v2 and runs the same genome-guided path.
-conda_pin = "=2.2.1=h3198e80_0"
+min_version = "3.0"
 
 [segemehl]
 binary = "segemehl.x"
@@ -122,11 +115,7 @@ version_cmd = ["rnaspades.py", "--version"]
 required_by = []
 # rnaspades.py ships in the bioconda 'spades' package.
 conda_package = "spades"
-min_version = "4.2"
-# Pinned to the last x86-64-v2 build: bioconda's 4.2.0 h8d6e82b rebuilds and
-# the 4.3.0 build require AVX2 (x86-64-v3) and SIGILL (spades-core, signal 4)
-# on pre-Haswell CPUs. 4.2.0=haf24da9_0 is the last x86-64-v2 build.
-conda_pin = "=4.2.0=haf24da9_0"
+min_version = "4.3"
 
 [trinity]
 binary = "Trinity"
@@ -134,11 +123,6 @@ version_cmd = ["Trinity", "--version"]
 required_by = ["assemble"]
 conda_package = "trinity"
 min_version = "2.15"
-# Pinned to the last x86-64-v2 build: bioconda's newer 2.15.2 builds (h077b44d)
-# are compiled -march=x86-64-v3 and emit BMI2 (sarx/shrx), which SIGILL on
-# pre-Haswell CPUs (e.g. Xeon E5-2690 v2). The _0 build is x86-64-v2 and runs
-# the same genome-guided + de-novo paths.
-conda_pin = "=2.15.2=pl5321hdcf5f25_0"
 # TRINITY_HOME is version-specific; set by the Dockerfile ENV.
 env_vars = [{ var = "TRINITY_HOME" }]
 
@@ -156,10 +140,6 @@ version_cmd = ["spaln", "-h"]
 required_by = ["annotate"]
 conda_package = "spaln"
 min_version = "3.0"
-# Pinned to the last x86-64-v2 build: bioconda's newer spaln builds
-# (3.0.6b+, h077b44d/hf426362) require AVX2 (x86-64-v3) and SIGILL on
-# pre-Haswell CPUs.
-conda_pin = "=3.0.6=pl5321hdcf5f25_0"
 env_vars = [
     { var = "ALN_TAB", path = "share/spaln/table" },
     { var = "ALN_DBS", path = "share/spaln/seqdb" },

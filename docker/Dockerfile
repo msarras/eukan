@@ -33,11 +33,20 @@ RUN mamba env create -f environment.yml \
 # Activate the eukan environment for all subsequent RUN commands
 SHELL ["conda", "run", "-n", "eukan", "/bin/bash", "-c"]
 
-# Trinity's bundled C++ no longer needs a non-AVX2 rebuild here: the conda env
-# pins trinity to the x86-64-v2 build (=2.15.2=pl5321hdcf5f25_0, see
-# tools.toml / environment.yml), like star/augustus/spaln/spades/stringtie.
-# scripts/fix-trinity-avx2.sh remains as a manual recovery tool if that pin is
-# ever bypassed (e.g. `conda update trinity` pulling a -march=x86-64-v3 build).
+# Trinity's bundled C++ needs no special handling here: the conda env installs
+# bioconda's current trinity build (compiled -march=x86-64-v3, AVX2/BMI2). The
+# former x86-64-v2 pins (star/augustus/spaln/spades/stringtie/trinity) were
+# dropped now that the deployment host is AVX2-capable, so this image requires
+# an x86-64-v3 (Haswell+/Broadwell+) CPU at runtime.
+# scripts/fix-trinity-avx2.sh remains only as a manual recovery tool for hosts
+# without AVX2 (it rebuilds Trinity's binaries at a lower -march).
+#
+# Symlink the versioned trinity install dir to a stable opt/trinity (the same
+# trick the GeneMark step uses below) so the TRINITY_HOME ENV stays valid when
+# the unpinned `trinity>=2.15` floor resolves to a version newer than 2.15.2.
+RUN trinity_dir="$(ls -d /opt/conda/envs/eukan/opt/trinity-* 2>/dev/null | head -1)" \
+    && ln -sfn "$trinity_dir" /opt/conda/envs/eukan/opt/trinity \
+    && test -d /opt/conda/envs/eukan/opt/trinity
 
 # ---------------------------------------------------------------------------
 # 2. Build fitild from source (gsl + liblbfgs come from the conda env)
@@ -245,7 +254,7 @@ ENV CONDA_DEFAULT_ENV=eukan \
     AUGUSTUS_CONFIG_PATH="/opt/conda/envs/eukan/config" \
     QUARRY_PATH="/opt/conda/envs/eukan/opt/codingquarry-2.0/QuarryFiles" \
     EVM_HOME="/opt/conda/envs/eukan/opt/evidencemodeler-2.1.0" \
-    TRINITY_HOME="/opt/conda/envs/eukan/opt/trinity-2.15.2" \
+    TRINITY_HOME="/opt/conda/envs/eukan/opt/trinity" \
     PASAHOME="/opt/conda/envs/eukan/opt/pasa-2.5.3" \
     ALN_TAB="/opt/conda/envs/eukan/share/spaln/table" \
     ALN_DBS="/opt/conda/envs/eukan/share/spaln/seqdb" \

@@ -37,9 +37,9 @@ def _run_trinity_mode(
     ``--no_salmon`` skips Trinity's final salmon-based expression filtering of
     isoforms. bioconda's Trinity 2.15.2 pulls salmon 2.x (the Rust rewrite),
     whose CLI dropped the ``--minAssignedFrags``/``--validateMappings`` flags
-    Trinity still passes, so the filter step errors out on every platform; the
-    C++ salmon 1.x that *does* accept them is compiled with AVX2 and SIGILLs on
-    pre-Haswell CPUs. Skipping it lets Trinity finish; the combinr consolidation
+    Trinity still passes, so the filter step errors out on every platform (the
+    older C++ salmon 1.x that still accepts those flags isn't bundled in the
+    conda env). Skipping it lets Trinity finish; the combinr consolidation
     step downstream removes the redundant isoforms the filter would have.
     """
     wd = config.work_dir
