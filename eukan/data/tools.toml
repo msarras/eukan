@@ -123,7 +123,10 @@ version_cmd = ["Trinity", "--version"]
 required_by = ["assemble"]
 conda_package = "trinity"
 min_version = "2.15"
-# TRINITY_HOME is version-specific; set by the Dockerfile ENV.
+# TRINITY_HOME points at the env's bin/ (bioconda's current build installs the
+# Trinity tree there); set by the Dockerfile ENV. eukan only calls `Trinity` on
+# PATH — the wrapper self-locates via FindBin — so this is declared just so
+# `eukan check` reports it.
 env_vars = [{ var = "TRINITY_HOME" }]
 
 [jellyfish]

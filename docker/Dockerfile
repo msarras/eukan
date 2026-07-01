@@ -41,12 +41,12 @@ SHELL ["conda", "run", "-n", "eukan", "/bin/bash", "-c"]
 # scripts/fix-trinity-avx2.sh remains only as a manual recovery tool for hosts
 # without AVX2 (it rebuilds Trinity's binaries at a lower -march).
 #
-# Symlink the versioned trinity install dir to a stable opt/trinity (the same
-# trick the GeneMark step uses below) so the TRINITY_HOME ENV stays valid when
-# the unpinned `trinity>=2.15` floor resolves to a version newer than 2.15.2.
-RUN trinity_dir="$(ls -d /opt/conda/envs/eukan/opt/trinity-* 2>/dev/null | head -1)" \
-    && ln -sfn "$trinity_dir" /opt/conda/envs/eukan/opt/trinity \
-    && test -d /opt/conda/envs/eukan/opt/trinity
+# TRINITY_HOME: bioconda's current trinity build (h077b44d_6) installs the whole
+# Trinity tree directly under the env's bin/ (bin/Trinity, bin/util, bin/trinity-
+# plugins, ...) — there is no longer an opt/trinity-<version> dir to symlink (the
+# old x86-64-v2 _0 build had one). The package's own activate.d hook sets
+# TRINITY_HOME=$PREFIX/bin, so the runtime ENV below points there; it is
+# version-independent, so no per-version symlink is needed.
 
 # ---------------------------------------------------------------------------
 # 2. Build fitild from source (gsl + liblbfgs come from the conda env)
@@ -254,7 +254,7 @@ ENV CONDA_DEFAULT_ENV=eukan \
     AUGUSTUS_CONFIG_PATH="/opt/conda/envs/eukan/config" \
     QUARRY_PATH="/opt/conda/envs/eukan/opt/codingquarry-2.0/QuarryFiles" \
     EVM_HOME="/opt/conda/envs/eukan/opt/evidencemodeler-2.1.0" \
-    TRINITY_HOME="/opt/conda/envs/eukan/opt/trinity" \
+    TRINITY_HOME="/opt/conda/envs/eukan/bin" \
     PASAHOME="/opt/conda/envs/eukan/opt/pasa-2.5.3" \
     ALN_TAB="/opt/conda/envs/eukan/share/spaln/table" \
     ALN_DBS="/opt/conda/envs/eukan/share/spaln/seqdb" \
