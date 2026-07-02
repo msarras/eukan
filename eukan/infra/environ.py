@@ -18,6 +18,7 @@ Usage::
 
 from __future__ import annotations
 
+import contextlib
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -95,10 +96,8 @@ def _raise_open_file_limit() -> None:
     target = ceiling if hard == resource.RLIM_INFINITY else min(hard, ceiling)
     if soft >= target:
         return
-    try:
+    with contextlib.suppress(ValueError, OSError):
         resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
-    except (ValueError, OSError):
-        pass
 
 
 def configure_process_env() -> None:
