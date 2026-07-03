@@ -139,7 +139,9 @@ RUN genemark_tar=$(ls /tmp/_genemark/gmes_linux_64*.tar.gz 2>/dev/null | head -1
 #   - AUGUSTUS pre-shipped species (165 of 166) — eukan always trains from
 #     scratch via new_species.pl using the `generic` template
 #   - GeneMark GeneMark-E-tests + ProtHint — test data + EP+ mode (unused)
-#   - bin/k8 — minimap2 JS shell helper, no consumer here
+#   - bin/k8 — JS shell for minimap2's paftools.js only; eukan calls the
+#     minimap2 binary directly (BAM via samtools/pysam), never paftools, so the
+#     read/transcript mapping is unaffected by removing it
 # ---------------------------------------------------------------------------
 RUN find /opt/conda/envs/eukan -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true \
     && find /opt/conda/envs/eukan -name "*.a" -delete 2>/dev/null || true \
