@@ -12,9 +12,13 @@
 FROM condaforge/mambaforge:latest AS builder
 
 # System packages needed for building fitild and spaln from source, plus
-# curl/xz to fetch and unpack the pre-built combinr release tarball.
+# curl/xz to fetch and unpack the pre-built combinr release tarball. jq must be
+# on PATH before `mamba env create`: bioconductor data packages (pulled in
+# transitively by trinity's R stack, e.g. bioconductor-genomeinfodbdata) run a
+# post-link script that calls yq -> jq to parse their data-URL JSON, and the
+# mambaforge base image does not ship jq — without it the env create aborts.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential git autoconf curl ca-certificates xz-utils \
+    build-essential git autoconf curl ca-certificates xz-utils jq \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
